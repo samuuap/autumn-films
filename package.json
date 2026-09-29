@@ -12,7 +12,11 @@
     "preview": "astro preview",
     "typecheck": "astro check",
     "sync": "astro sync",
-    "astro": "astro"
+    "astro": "astro",
+    "db:push": "supabase db push",
+    "db:verify": "node scripts/verify-schema.mjs",
+    "db:verify-rls": "node scripts/verify-rls.mjs",
+    "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts"
   },
   "dependencies": {
     "@astrojs/vercel": "^11.0.11",
@@ -27,6 +31,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
+    "supabase": "^2.118.0",
     "typescript": "^6.0.3"
   }
 }

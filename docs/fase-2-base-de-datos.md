@@ -1,6 +1,6 @@
 # Fase 2 — Base de datos
 
-**Estado:** ⏳ Pendiente
+**Estado:** ✅ Completada
 **Depende de:** [Fase 1](fase-1-scaffolding.md) ✅
 **Actualizado:** 2026-09-29
 
@@ -12,85 +12,102 @@ la [Fase 4](fase-4-api-chat.md) sin tocar más SQL.
 
 ## Hecho
 
-Nada todavía. Los tipos de TypeScript que reflejan este esquema ya existen en
-`src/lib/database.types.ts`, escritos a partir del SQL documentado en
-`CLAUDE.md`: si el esquema real cambia, hay que actualizarlos o regenerarlos.
+### Herramientas
 
-## Pendiente
+- [x] CLI de Supabase 2.118 como dependencia de desarrollo, y `supabase init`
+- [x] Comandos: `npm run db:push`, `db:verify`, `db:types`
 
-### Extensiones y tablas
+### Migraciones escritas
 
-- [ ] Activar la extensión `vector`
-- [ ] Tabla `content` con `embedding VECTOR(1024)` — **1024, no 1536**: es la
-      dimensión nativa de Qwen3-Embedding-0.6B
-- [ ] Tabla `users_favorites` con `UNIQUE(user_id, content_id)`
-- [ ] Tabla `conversations` con `messages JSONB`
+En `supabase/migrations/`, en orden de aplicación:
 
-### Índices
+- [x] `20260929222000_initial_schema.sql` — extensión `vector`, las tres tablas,
+      índice HNSW, índices auxiliares y trigger de `updated_at`
+- [x] `20260929222100_search_content.sql` — la función de búsqueda semántica
+- [x] `20260929222200_rls_policies.sql` — RLS y políticas
 
-- [ ] Índice vectorial sobre `content.embedding` — **decisión pendiente**, ver
-      pregunta 1
-- [ ] Índices auxiliares que el MVP va a necesitar y no están en `CLAUDE.md`:
-      `conversations(user_id, updated_at DESC)` para listar las conversaciones de
-      un usuario, y `users_favorites(user_id)` para su lista de favoritos.
-      `content.tmdb_id` ya queda indexado por ser `UNIQUE`
+### SQL validado sin base de datos
 
-### Función de búsqueda
+No hay Docker ni Postgres en la máquina de desarrollo, así que las migraciones se
+validaron con el parser de PostgreSQL compilado a WASM (`pg-query-emscripten`):
 
-- [ ] `search_content(query_embedding VECTOR(1024), content_type, match_count, min_score)`
-- [ ] Verificar que el filtro por `content_type` no impide usar el índice
-      vectorial. Con `ORDER BY embedding <=> query` y un `WHERE` por tipo, el
-      planificador puede acabar filtrando después de recuperar los vecinos, y
-      devolver menos resultados de los pedidos
-- [ ] Calibrar `min_score` con datos reales. El `0.5` por defecto es un valor
-      puesto a ojo: con coseno sobre Qwen3 habrá que ver dónde cae de verdad el
-      corte entre «encaja» y «no encaja»
+- [x] Las tres migraciones parsean sin errores — 26 sentencias en total
+- [x] Auditoría del árbol de parseo: confirma `unique (tmdb_id, type)`,
+      `unique (user_id, content_id)`, el índice HNSW con
+      `extensions.vector_cosine_ops`, las dos funciones, RLS activado en las tres
+      tablas y las 8 políticas con sus comandos y roles
 
-### RLS
+Esto descarta los errores de sintaxis, que son la forma más probable de que
+falle una migración escrita a mano. No valida la semántica: que el tipo
+`extensions.vector` o `auth.users` existan solo se sabe al aplicarla.
 
-- [ ] `content`: lectura para todos (`anon` incluido), escritura solo con la
-      secret key. El corpus es público
-- [ ] `users_favorites`: `SELECT`, `INSERT` y `DELETE` restringidos a
-      `auth.uid() = user_id`
-- [ ] `conversations`: igual, `auth.uid() = user_id` en las cuatro operaciones
-- [ ] Verificar que `search_content` respeta RLS. Es `LANGUAGE sql STABLE` sin
-      `SECURITY DEFINER`, así que debería ejecutarse con los permisos de quien
-      llama, pero hay que comprobarlo explícitamente
-- [ ] Probar cada política con un token de otro usuario, no solo con la service
-      key. Una política mal escrita no da error: da datos de más
+### Verificación automatizada
 
-### Mantenimiento
+- [x] `scripts/verify-schema.mjs` (`npm run db:verify`) — 15 comprobaciones
+      contra el Data API: existencia de tablas, `search_content` con un vector de
+      1024 dim, rechazo de dimensión incorrecta, lectura pública del corpus,
+      bloqueo de escritura a `anon`, invisibilidad de favoritos y conversaciones,
+      `unique (tmdb_id, type)`, checks de `type` y `mode`, validez de los modos
+      `weekend` y `month`, y el trigger de `updated_at`. Borra sus datos de prueba
+- [x] `scripts/verify-rls.mjs` (`npm run db:verify-rls`) — 16 comprobaciones de
+      aislamiento entre dos usuarios reales: A ve lo suyo, B no ve, no modifica y
+      no borra las filas de A, B no puede crear filas a nombre de A, y ningún
+      usuario autenticado puede escribir en el corpus. Crea las dos cuentas con
+      la Admin API y las borra al terminar
+- [x] El camino de autenticación ya está probado end-to-end: crear usuario
+      confirmado, iniciar sesión con contraseña y borrar usuario funcionan con
+      las claves del proyecto. Eso desbloquea también la auth de la
+      [Fase 5](fase-5-frontend.md)
 
-- [ ] Trigger para `conversations.updated_at`, que ahora solo tiene `DEFAULT NOW()`
-      y no se actualiza al modificar la fila
+## Aplicado y verificado
+
+Aplicado sobre el proyecto `autumn-films` (Postgres 17.6, `eu-west-1`) con
+`supabase db push`. Cuatro migraciones, ninguna con errores.
+
+- [x] `npm run db:verify` → **18/18**
+- [x] `npm run db:verify-rls` → **21/21**, incluido que B no ve, no modifica ni
+      borra las filas de A, y que no puede crearlas a su nombre
+- [x] `npm run db:types` — tipos regenerados desde el esquema real
 
 ## Decisiones tomadas
 
 | Decisión | Motivo |
 |---|---|
-| `VECTOR(1024)` en vez de `VECTOR(1536)` | Dimensión nativa de Qwen3-Embedding-0.6B. El 1536 del diseño original venía de asumir un modelo de embeddings de DeepSeek que no existe |
+| Índice **HNSW** en lugar de ivfflat | No hay que dimensionar listas, da mejor recall y se puede crear sobre la tabla vacía. Con 5.000 filas, el `lists = 100` del diseño original dejaría ~50 filas por lista y degradaría la recuperación; la heurística de pgvector daría 5 |
+| Migraciones versionadas con el **CLI de Supabase** | El esquema queda en el repo, revisable en diff y reproducible. Para un proyecto que va a reindexar el corpus más de una vez, compensa frente a aplicar SQL a mano en el dashboard |
+| `unique (tmdb_id, type)` en vez de `tmdb_id unique` | TMDB numera películas y series en espacios independientes: `/movie/550` y `/tv/550` son obras distintas. Con la unicidad solo sobre `tmdb_id`, el seed de la Fase 3 habría rechazado series por colisionar con el id de una película. Los ids bajos colisionan con casi total seguridad |
+| El tipo `vector` y la opclass van cualificados como `extensions.…` | No puedo aplicar las migraciones para probarlas, así que el DDL no debe depender de que `extensions` esté en el `search_path` de la sesión que las aplica |
+| **No** fijar `hnsw.ef_search` en la función | Sería lo indicado contra el filtrado posterior, pero ese GUC solo existe si la biblioteca de pgvector está cargada en la sesión, y la migración podría fallar al crear la función. Es el primer parámetro que tocar cuando haya corpus para medir |
+| `set search_path = public, extensions` en las funciones | Evita el secuestro de resolución de nombres y garantiza que el operador `<=>` de pgvector resuelva |
+| `where embedding is not null` en `search_content` | Una fila sin vectorizar no debe aparecer nunca como candidata |
+| Tope de `match_count` a 50 dentro de la función | Está expuesta por PostgREST a `anon`: sin límite, una sola llamada podría volcar el corpus |
+| `(select auth.uid())` en las políticas, no `auth.uid()` | Envuelto en subselect, Postgres lo evalúa una vez por consulta en lugar de una vez por fila |
+| Sin política de `update` en `users_favorites` | Un favorito no se edita: se quita y se vuelve a poner |
+| Sin índice sobre `content(type)` ni sobre `users_favorites(user_id)` | El primero tiene dos valores en 5.000 filas: el planificador no lo usaría. El segundo ya está cubierto por el índice de `unique (user_id, content_id)`, cuyo prefijo es `user_id` |
+| Guarda de dimensión en `search_content`, en PL/pgSQL | Postgres no aplica los modificadores de tipo a los parámetros de función: el `vector(1024)` de la firma no validaba nada. Un vector de otra dimensión entraba y, con el corpus vacío o el filtro descartando todo, la consulta devolvía 0 filas en silencio — indistinguible de «ningún título encaja». Lo detectó `db:verify`, no la revisión a ojo |
+| Correcciones de tipos en `src/lib/types.ts`, no en el archivo generado | `supabase gen types` manda en la forma, pero no expresa los `CHECK` (salen como `string`) ni la nullabilidad de un `RETURNS TABLE` (devuelve todo como no nulable). Lo segundo es **inseguro**: dejaría pasar un `candidate.director.trim()` que reventaría en ejecución |
 
 ## Preguntas abiertas
 
-**1. ¿Índice vectorial ivfflat o HNSW?**
-`CLAUDE.md` propone `ivfflat` con `lists = 100`, pero la heurística de pgvector
-es `filas / 1000` hasta un millón de filas: para 5.000 títulos serían unas **5**
-listas, no 100. Con 100 quedan ~50 filas por lista y el recall se degrada.
-Las opciones son ajustar a `lists = 5`, o pasar a HNSW, que no hay que tunear,
-da mejor recall y a este tamaño de corpus construye rápido. HNSW ocupa más y
-escribe más lento, lo que aquí casi no importa: el corpus se carga una vez.
+**1. ¿Cuánto degrada el filtro posterior a la búsqueda vectorial?**
+No se puede responder sin corpus. Con datos reales (Fase 3) hay que mirar con
+`explain analyze` si `search_content` devuelve de verdad `match_count` filas al
+filtrar por tipo. Si se queda corta, las salidas son subir más `hnsw.ef_search`,
+crear índices HNSW parciales por tipo, o pedir más candidatos y filtrar en la
+aplicación. Nota aparte: con 5.000 filas el planificador puede elegir un recorrido
+secuencial exacto en lugar del índice, y eso **no es un problema** — da recall
+perfecto y a este tamaño cuesta milisegundos.
 
-**2. ¿Migraciones versionadas o SQL a mano?**
-Con el CLI de Supabase el esquema queda en `supabase/migrations/` dentro del
-repo, reproducible y revisable en diff. Aplicarlo a mano en el dashboard es más
-rápido ahora y deja el esquema sin rastro en git. Para un proyecto que va a
-reindexar el corpus más de una vez, lo versionado sale mejor.
+**2. ¿Debe `anon` poder leer la columna `embedding`?**
+La política de lectura del corpus permite `select` sobre todas las columnas, así
+que cualquiera con la publishable key puede descargarse los 5.000 vectores, que
+son el resultado de un trabajo de vectorización. Limitarlo requiere exponer una
+vista sin esa columna y mover la política ahí. Para el MVP no es urgente, pero
+conviene decidirlo antes de abrir al público.
 
 ## Verificación
 
-- `search_content` con un vector de prueba devuelve filas ordenadas por
-  `similarity` descendente
-- Un usuario autenticado no puede leer las conversaciones ni los favoritos de
-  otro, comprobado con dos cuentas distintas
-- Un cliente `anon` puede leer `content` pero no escribirlo
-- `src/lib/database.types.ts` sigue cuadrando con el esquema real
+```bash
+npm run db:verify   # 15/15 cuando las migraciones estén aplicadas
+npm run db:types    # el esquema real debe coincidir con database.types.ts
+```

@@ -49,10 +49,14 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │   └── styles/
 │       └── global.css       # Tailwind + tema otoñal
 ├── scripts/
+│   ├── verify-schema.mjs    # Comprueba esquema y RLS vía Data API
 │   └── seed/
 │       ├── fetch-tmdb.py    # Descarga películas/series de TMDB
 │       ├── embed.py         # Vectoriza sinopsis + keywords con Qwen3
 │       └── load-db.py       # Carga vectores en Supabase pgvector
+├── supabase/
+│   ├── config.toml          # Configuración del CLI
+│   └── migrations/          # Esquema versionado, en orden de aplicación
 ├── docs/                    # Estado del trabajo por fases (ver abajo)
 ├── public/
 ├── .claude/CLAUDE.md
@@ -103,6 +107,15 @@ aparecen etiquetadas como `anon public` y `service_role`.
 npm run dev        # Desarrollo local
 npm run build      # Build de producción
 npm run preview    # Preview del build
+npm run typecheck  # astro check
+
+# Base de datos (migraciones versionadas en supabase/migrations/)
+npx supabase login                                  # una vez, abre el navegador
+npx supabase link --project-ref <ref-del-proyecto>  # una vez
+npm run db:push    # aplica las migraciones pendientes
+npm run db:verify  # comprueba esquema, RLS y restricciones vía Data API
+npm run db:verify-rls  # comprueba el aislamiento entre dos usuarios reales
+npm run db:types   # regenera src/lib/database.types.ts desde el esquema real
 
 # Seed del corpus (una vez, o para actualizaciones)
 cd scripts/seed
@@ -121,7 +134,7 @@ python load-db.py      # Carga en Supabase
 ```sql
 CREATE TABLE content (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tmdb_id       INTEGER UNIQUE NOT NULL,
+  tmdb_id       INTEGER NOT NULL,
   type          TEXT NOT NULL CHECK (type IN ('movie', 'tv')),
   title         TEXT NOT NULL,
   title_en      TEXT,
@@ -138,11 +151,17 @@ CREATE TABLE content (
   runtime       INTEGER,
   seasons       INTEGER,
   status        TEXT CHECK (status IN ('released', 'ended', 'ongoing')),
-  created_at    TIMESTAMPTZ DEFAULT NOW()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- TMDB numera películas y series en espacios independientes: /movie/550 y
+  -- /tv/550 son obras distintas. La unicidad debe incluir el tipo.
+  UNIQUE (tmdb_id, type)
 );
 
-CREATE INDEX ON content USING ivfflat (embedding vector_cosine_ops)
-  WITH (lists = 100);
+-- HNSW y no ivfflat: no hay que dimensionar listas, da mejor recall y se puede
+-- crear sobre la tabla vacía. Con 5.000 filas, ivfflat con lists=100 dejaría
+-- ~50 filas por lista y degradaría la recuperación.
+CREATE INDEX ON content USING hnsw (embedding vector_cosine_ops);
 ```
 
 ### `users_favorites`
@@ -185,17 +204,19 @@ RETURNS TABLE (
   genres TEXT[], autumn_score FLOAT, poster_path TEXT,
   similarity FLOAT
 )
-LANGUAGE sql STABLE AS $$
-  SELECT id, tmdb_id, type, title, year, director, synopsis,
-         genres, autumn_score, poster_path,
-         1 - (embedding <=> query_embedding) AS similarity
-  FROM content
-  WHERE (content_type IS NULL OR type = content_type)
-    AND 1 - (embedding <=> query_embedding) > min_score
-  ORDER BY embedding <=> query_embedding
-  LIMIT match_count;
-$$;
+LANGUAGE plpgsql STABLE
+SET search_path = public, extensions
 ```
+
+La implementación está en `supabase/migrations/`, que es la fuente real. Tres
+cosas de su comportamiento que no se ven en la firma:
+
+- Es **PL/pgSQL y no SQL** solo para poder lanzar un error si el vector no tiene
+  1024 dimensiones. Postgres **no** aplica los modificadores de tipo a los
+  parámetros de función, así que el `VECTOR(1024)` de la firma no valida nada: un
+  vector de otra dimensión entraría y la consulta devolvería 0 filas en silencio
+- Descarta las filas con `embedding IS NULL`
+- Limita `match_count` a 50: está expuesta por PostgREST a `anon`
 
 ---
 
@@ -243,6 +264,10 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
 - Variables de entorno siempre via `src/lib/env.ts`, nunca `process.env.X` suelto
 - Errores siempre tipados, nunca `catch(e: any)`
 - Comentarios en español, código (variables, funciones) en inglés
+- `src/lib/database.types.ts` se **genera** con `npm run db:types`: no editarlo a
+  mano. El generador no sabe expresar dos cosas del esquema —las columnas con
+  `CHECK` salen como `string`, y `search_content` devuelve todo como no nulable—,
+  así que esas correcciones viven en `src/lib/types.ts`
 - Imports con alias `@/` para `src/`
 - Streaming activado siempre en las llamadas al chat de DeepSeek
 

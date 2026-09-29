@@ -9,7 +9,7 @@ La documentación **técnica** (stack, esquema, convenciones, estética) está e
 | Fase | Contenido | Estado |
 |---|---|---|
 | [1](fase-1-scaffolding.md) | Scaffolding y configuración base | ✅ Completada |
-| [2](fase-2-base-de-datos.md) | Base de datos: esquema, pgvector y RLS | ⏳ Pendiente |
+| [2](fase-2-base-de-datos.md) | Base de datos: esquema, pgvector y RLS | ✅ Completada |
 | [3](fase-3-seed-corpus.md) | Seed del corpus desde TMDB | ⏳ Pendiente |
 | [4](fase-4-api-chat.md) | API del chat con streaming | ⏳ Pendiente |
 | [5](fase-5-frontend.md) | Frontend, ficha de contenido y auth | ⏳ Pendiente |
@@ -31,6 +31,8 @@ su fase.
 | Hablar con el servicio de embeddings por la API de OpenAI | TEI y vLLM la exponen igual, así que pasar de local a gestionado es cambiar `EMBEDDINGS_URL` y nada más | 3, 4, 6 |
 | Consultas y documentos vectorizados de forma asimétrica | Qwen3-Embedding pierde entre 1% y 5% de precisión de recuperación si la consulta no va envuelta en `Instruct: {tarea}\nQuery:{texto}` | 3, 4 |
 | Variables de entorno con `astro:env` en vez de `import.meta.env` | Valida en build que no falte ninguna y hace imposible que un secreto de servidor entre en el bundle de cliente | 1, 4, 5 |
+| Esquema versionado en `supabase/migrations/` con el CLI de Supabase | El esquema queda en el repo, revisable en diff y reproducible tras cada reindexado del corpus | 2, 3 |
+| Índice vectorial HNSW en lugar de ivfflat | Sin listas que dimensionar, mejor recall, y se crea sobre la tabla vacía. A 5.000 filas el `lists = 100` del diseño original degradaría la recuperación | 2, 4 |
 
 ---
 
@@ -40,8 +42,8 @@ Ordenadas por la fase que las bloquea. El detalle está en cada archivo.
 
 | # | Pregunta | Bloquea |
 |---|---|---|
-| 1 | ¿Índice vectorial ivfflat o HNSW? | [Fase 2](fase-2-base-de-datos.md) |
-| 2 | ¿Migraciones versionadas con Supabase CLI o SQL aplicado a mano? | [Fase 2](fase-2-base-de-datos.md) |
+| 1 | ¿Cuánto degrada el filtro por tipo a la búsqueda vectorial? Medir con corpus | [Fase 3](fase-3-seed-corpus.md) |
+| 2 | ¿Debe `anon` poder leer la columna `embedding`? | [Fase 2](fase-2-base-de-datos.md) |
 | 3 | ¿Cómo se define «otoñal» y cómo se calcula `autumn_score`? | [Fase 3](fase-3-seed-corpus.md) |
 | 4 | ¿Vectorizamos la sinopsis española, la inglesa o ambas? | [Fase 3](fase-3-seed-corpus.md) |
 | 5 | ¿Qué historial ve un usuario sin cuenta, si no hay `localStorage`? | [Fase 4](fase-4-api-chat.md) |

@@ -1,156 +1,324 @@
-/**
- * Tipos de la base de datos de Supabase.
- *
- * Escritos a mano a partir del esquema documentado en CLAUDE.md. Cuando el
- * proyecto de Supabase exista (Fase 2) se pueden regenerar con:
- *
- *   npx supabase gen types typescript --project-id <id> > src/lib/database.types.ts
- *
- * Nota sobre `embedding`: PostgREST serializa las columnas `vector` como string
- * (`"[0.1,0.2,...]"`). En los `Insert` se acepta además `number[]`, que Postgres
- * castea solo.
- */
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
 
-export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
-
-export type ContentTypeColumn = 'movie' | 'tv';
-export type ContentStatusColumn = 'released' | 'ended' | 'ongoing';
-export type ConversationModeColumn = 'movie' | 'tv' | 'weekend' | 'month';
-
-interface ContentRow {
-  id: string;
-  tmdb_id: number;
-  type: ContentTypeColumn;
-  title: string;
-  title_en: string | null;
-  year: number | null;
-  director: string | null;
-  synopsis: string | null;
-  synopsis_en: string | null;
-  genres: string[] | null;
-  keywords: string[] | null;
-  autumn_score: number | null;
-  embedding: string | null;
-  poster_path: string | null;
-  backdrop_path: string | null;
-  runtime: number | null;
-  seasons: number | null;
-  status: ContentStatusColumn | null;
-  created_at: string;
-}
-
-interface ContentInsert {
-  id?: string | undefined;
-  tmdb_id: number;
-  type: ContentTypeColumn;
-  title: string;
-  title_en?: string | null | undefined;
-  year?: number | null | undefined;
-  director?: string | null | undefined;
-  synopsis?: string | null | undefined;
-  synopsis_en?: string | null | undefined;
-  genres?: string[] | null | undefined;
-  keywords?: string[] | null | undefined;
-  autumn_score?: number | null | undefined;
-  embedding?: string | number[] | null | undefined;
-  poster_path?: string | null | undefined;
-  backdrop_path?: string | null | undefined;
-  runtime?: number | null | undefined;
-  seasons?: number | null | undefined;
-  status?: ContentStatusColumn | null | undefined;
-  created_at?: string | undefined;
-}
-
-interface UsersFavoritesRow {
-  id: string;
-  user_id: string | null;
-  content_id: string | null;
-  created_at: string;
-}
-
-interface ConversationsRow {
-  id: string;
-  user_id: string | null;
-  mode: ConversationModeColumn;
-  messages: Json;
-  created_at: string;
-  updated_at: string;
-}
-
-/** Fila que devuelve la función SQL `search_content`. */
-export interface SearchContentRow {
-  id: string;
-  tmdb_id: number;
-  type: ContentTypeColumn;
-  title: string;
-  year: number | null;
-  director: string | null;
-  synopsis: string | null;
-  genres: string[] | null;
-  autumn_score: number | null;
-  poster_path: string | null;
-  similarity: number;
-}
-
-export interface Database {
+export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.18"
+  }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       content: {
-        Row: ContentRow;
-        Insert: ContentInsert;
-        Update: Partial<ContentInsert>;
-        Relationships: [];
-      };
-      users_favorites: {
-        Row: UsersFavoritesRow;
+        Row: {
+          autumn_score: number | null
+          backdrop_path: string | null
+          created_at: string
+          director: string | null
+          embedding: string | null
+          genres: string[] | null
+          id: string
+          keywords: string[] | null
+          poster_path: string | null
+          runtime: number | null
+          seasons: number | null
+          status: string | null
+          synopsis: string | null
+          synopsis_en: string | null
+          title: string
+          title_en: string | null
+          tmdb_id: number
+          type: string
+          year: number | null
+        }
         Insert: {
-          id?: string | undefined;
-          user_id?: string | null | undefined;
-          content_id?: string | null | undefined;
-          created_at?: string | undefined;
-        };
+          autumn_score?: number | null
+          backdrop_path?: string | null
+          created_at?: string
+          director?: string | null
+          embedding?: string | null
+          genres?: string[] | null
+          id?: string
+          keywords?: string[] | null
+          poster_path?: string | null
+          runtime?: number | null
+          seasons?: number | null
+          status?: string | null
+          synopsis?: string | null
+          synopsis_en?: string | null
+          title: string
+          title_en?: string | null
+          tmdb_id: number
+          type: string
+          year?: number | null
+        }
         Update: {
-          id?: string | undefined;
-          user_id?: string | null | undefined;
-          content_id?: string | null | undefined;
-          created_at?: string | undefined;
-        };
-        Relationships: [];
-      };
+          autumn_score?: number | null
+          backdrop_path?: string | null
+          created_at?: string
+          director?: string | null
+          embedding?: string | null
+          genres?: string[] | null
+          id?: string
+          keywords?: string[] | null
+          poster_path?: string | null
+          runtime?: number | null
+          seasons?: number | null
+          status?: string | null
+          synopsis?: string | null
+          synopsis_en?: string | null
+          title?: string
+          title_en?: string | null
+          tmdb_id?: number
+          type?: string
+          year?: number | null
+        }
+        Relationships: []
+      }
       conversations: {
-        Row: ConversationsRow;
+        Row: {
+          created_at: string
+          id: string
+          messages: Json
+          mode: string
+          updated_at: string
+          user_id: string | null
+        }
         Insert: {
-          id?: string | undefined;
-          user_id?: string | null | undefined;
-          mode: ConversationModeColumn;
-          messages?: Json | undefined;
-          created_at?: string | undefined;
-          updated_at?: string | undefined;
-        };
+          created_at?: string
+          id?: string
+          messages?: Json
+          mode: string
+          updated_at?: string
+          user_id?: string | null
+        }
         Update: {
-          id?: string | undefined;
-          user_id?: string | null | undefined;
-          mode?: ConversationModeColumn | undefined;
-          messages?: Json | undefined;
-          created_at?: string | undefined;
-          updated_at?: string | undefined;
-        };
-        Relationships: [];
-      };
-    };
-    Views: { [_ in never]: never };
+          created_at?: string
+          id?: string
+          messages?: Json
+          mode?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      users_favorites: {
+        Row: {
+          content_id: string | null
+          created_at: string
+          id: string
+          user_id: string | null
+        }
+        Insert: {
+          content_id?: string | null
+          created_at?: string
+          id?: string
+          user_id?: string | null
+        }
+        Update: {
+          content_id?: string | null
+          created_at?: string
+          id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "users_favorites_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
     Functions: {
       search_content: {
         Args: {
-          query_embedding: string | number[];
-          content_type?: ContentTypeColumn | null | undefined;
-          match_count?: number | undefined;
-          min_score?: number | undefined;
-        };
-        Returns: SearchContentRow[];
-      };
-    };
-    Enums: { [_ in never]: never };
-    CompositeTypes: { [_ in never]: never };
-  };
+          content_type?: string
+          match_count?: number
+          min_score?: number
+          query_embedding: string
+        }
+        Returns: {
+          autumn_score: number
+          director: string
+          genres: string[]
+          id: string
+          poster_path: string
+          similarity: number
+          synopsis: string
+          title: string
+          tmdb_id: number
+          type: string
+          year: number
+        }[]
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
 }
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never) = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never) = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never) = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never) = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never) = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
+  public: {
+    Enums: {},
+  },
+} as const
