@@ -11,7 +11,7 @@ La documentación **técnica** (stack, esquema, convenciones, estética) está e
 | [1](fase-1-scaffolding.md) | Scaffolding y configuración base | ✅ Completada |
 | [2](fase-2-base-de-datos.md) | Base de datos: esquema, pgvector y RLS | ✅ Completada |
 | [3](fase-3-seed-corpus.md) | Seed del corpus desde TMDB | ✅ Completada |
-| [4](fase-4-api-chat.md) | API del chat con streaming | ⏳ Pendiente |
+| [4](fase-4-api-chat.md) | API del chat con streaming | 🔄 En curso |
 | [5](fase-5-frontend.md) | Frontend, ficha de contenido y auth | ⏳ Pendiente |
 | [6](fase-6-pulido-despliegue.md) | Pulido, i18n y despliegue | ⏳ Pendiente |
 
@@ -39,7 +39,7 @@ su fase.
 | Corpus 90/10: 4.500 películas y 500 series | Decisión de producto. TMDB tiene muchas menos series con votos suficientes | 3, 4, 5 |
 | Documentos vectorizados en inglés, con respaldo en español | TMDB solo tiene keywords en inglés y sus sinopsis inglesas son más completas. La recuperación con consultas en español funciona | 3, 4, 6 |
 | Embeddings locales con un servidor Python propio (`npm run embeddings`) | No hay Docker, y Docker Desktop exige licencia de pago en una empresa grande. Habla la misma API que TEI, así que el código TypeScript no cambia | 3, 4, 6 |
-| deepseek-flash razona por defecto; en procesos por lotes se desactiva | El razonamiento cuenta contra `max_tokens` y dejaba vacías las respuestas de la puntuación. Si el chat razona o no queda para la Fase 4 | 3, 4 |
+| deepseek-flash sin razonamiento: en la puntuación del corpus y en el chat de `movie` y `tv` | Razona por defecto y esos tokens cuentan contra `max_tokens`: vaciaba respuestas de la puntuación y, en el chat, 2 de 6 respuestas medidas; con más tope, la primera palabra tardaba hasta 6,3 s sin elegir mejor. `weekend` y `month` podrán activarlo | 3, 4 |
 
 ---
 

@@ -318,6 +318,9 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
   contra `max_tokens`: con un tope bajo la respuesta llega vacía o cortada. Se
   desactiva con `thinking: { type: 'disabled' }` en el cuerpo de la petición
   (`extra_body` en el SDK de Python)
+- **Sin razonamiento** en el chat de `movie` y `tv` y en `complete()`:
+  `src/lib/deepseek.ts` lo envía siempre. `weekend` y `month` podrán activarlo,
+  subiendo `max_tokens`. Motivo y medidas en `docs/fase-4-api-chat.md`
 
 ---
 

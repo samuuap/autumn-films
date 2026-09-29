@@ -11,6 +11,7 @@
  *  - El chat va SIEMPRE en streaming (mejor percepción de latencia).
  *  - Temperatura 0.8 para conversar, 0.1 para clasificar o extraer.
  *  - Máximo 600 tokens de respuesta.
+ *  - Sin razonamiento: ver `THINKING_DISABLED`.
  */
 import OpenAI from 'openai';
 
@@ -38,6 +39,19 @@ export const DEEPSEEK_TEMPERATURE = {
 } as const;
 
 export const DEEPSEEK_MAX_TOKENS = 600;
+
+/**
+ * `deepseek-flash` razona por defecto, y esos tokens cuentan contra `max_tokens`.
+ * Medido con prompts y candidatos reales: razonando con 600 tokens, una de cada
+ * tres respuestas llegó vacía; con 3.000, la primera palabra tardaba hasta 6,3 s
+ * y la elección no mejoraba. Sin razonar llega en menos de un segundo. Los modos
+ * `weekend` y `month` podrán activarlo, con más `max_tokens`, porque planificar
+ * varios días sí se beneficia de pensar.
+ */
+const THINKING_DISABLED = { type: 'disabled' } as const;
+
+/** `thinking` es propio de DeepSeek: el SDK de OpenAI no lo tipa, pero lo envía en el cuerpo. */
+type DeepSeekParams<T> = T & { readonly thinking: typeof THINKING_DISABLED };
 
 let client: OpenAI | undefined;
 
@@ -73,15 +87,17 @@ function toSdkMessages(
  * endpoint necesita leer `usage` o `finish_reason`.
  */
 export async function streamChat(options: ChatRequestOptions): Promise<ChunkStream> {
+  const body: DeepSeekParams<OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming> = {
+    model: DEEPSEEK_MODELS.chat,
+    messages: toSdkMessages(options.messages),
+    temperature: options.temperature ?? DEEPSEEK_TEMPERATURE.chat,
+    max_tokens: options.maxTokens ?? DEEPSEEK_MAX_TOKENS,
+    stream: true,
+    thinking: THINKING_DISABLED,
+  };
   try {
     return await getDeepSeekClient().chat.completions.create(
-      {
-        model: DEEPSEEK_MODELS.chat,
-        messages: toSdkMessages(options.messages),
-        temperature: options.temperature ?? DEEPSEEK_TEMPERATURE.chat,
-        max_tokens: options.maxTokens ?? DEEPSEEK_MAX_TOKENS,
-        stream: true,
-      },
+      body,
       options.signal === undefined ? undefined : { signal: options.signal },
     );
   } catch (error: unknown) {
@@ -108,15 +124,17 @@ export async function* streamChatText(options: ChatRequestOptions): AsyncGenerat
  * el modo, extraer entidades del mensaje). Nunca para la respuesta al usuario.
  */
 export async function complete(options: ChatRequestOptions): Promise<string> {
+  const body: DeepSeekParams<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming> = {
+    model: DEEPSEEK_MODELS.chat,
+    messages: toSdkMessages(options.messages),
+    temperature: options.temperature ?? DEEPSEEK_TEMPERATURE.extraction,
+    max_tokens: options.maxTokens ?? DEEPSEEK_MAX_TOKENS,
+    stream: false,
+    thinking: THINKING_DISABLED,
+  };
   try {
     const response = await getDeepSeekClient().chat.completions.create(
-      {
-        model: DEEPSEEK_MODELS.chat,
-        messages: toSdkMessages(options.messages),
-        temperature: options.temperature ?? DEEPSEEK_TEMPERATURE.extraction,
-        max_tokens: options.maxTokens ?? DEEPSEEK_MAX_TOKENS,
-        stream: false,
-      },
+      body,
       options.signal === undefined ? undefined : { signal: options.signal },
     );
 

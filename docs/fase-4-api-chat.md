@@ -1,8 +1,8 @@
 # Fase 4 — API del chat
 
-**Estado:** ⏳ Pendiente
+**Estado:** 🔄 En curso
 **Depende de:** [Fase 3](fase-3-seed-corpus.md) ✅ — sin corpus no hay candidatos
-**Actualizado:** 2026-09-29
+**Actualizado:** 2026-09-30
 
 ## Objetivo
 
@@ -12,9 +12,13 @@ enriquecimiento con TMDB.
 
 ## Hecho
 
-Nada todavía. `src/pages/api/` está creado y vacío. Las piezas que consume esta
-fase ya existen: `embedQuery()`, `streamChatText()`, los clientes de Supabase y
-TMDB, y las dos plantillas de `src/prompts/`.
+- [x] `src/lib/deepseek.ts` desactiva el razonamiento de `deepseek-flash` en
+      `streamChat` y `complete`. Sin esto, el chat devolvía respuestas vacías
+      (ver Decisiones). Comprobado que el SDK de Node envía el parámetro
+
+Ningún endpoint todavía: `src/pages/api/` sigue vacío. Las piezas que consume
+esta fase ya existen: `embedQuery()`, `streamChatText()`, los clientes de
+Supabase y TMDB, las dos plantillas de `src/prompts/` y el corpus cargado.
 
 ## Pendiente
 
@@ -44,15 +48,9 @@ TMDB, y las dos plantillas de `src/prompts/`.
 - [ ] Renderizar `src/prompts/user-context.md` sustituyendo las `{{variables}}`
       que el propio archivo documenta
 - [ ] Llamada a `deepseek-flash` con `system.md` + contexto + historial
-- [ ] **Decidir si el chat razona.** `deepseek-flash` razona por defecto y esos
-      tokens cuentan contra `max_tokens`. Medido en la Fase 3: 463 tokens de
-      razonamiento para puntuar **un** título, y con 25 títulos y
-      `max_tokens: 1000` la respuesta llegó vacía. Hoy `streamChat` y `complete`
-      en `src/lib/deepseek.ts` no lo desactivan, y con el tope de 600 el chat
-      devolvería respuestas vacías o cortadas. Además, el razonamiento retrasa el
-      primer token de texto, y la verificación de esta fase pide que el stream
-      empiece antes de dos segundos. O se desactiva
-      (`thinking: { type: 'disabled' }`) o se sube el tope y se asume la latencia
+- [x] **Decidir si el chat razona.** No, en `movie` y `tv`: `streamChat` y
+      `complete` envían `thinking: { type: 'disabled' }`. Medidas y motivo en
+      Decisiones
 - [ ] Devolver el stream al cliente
 - [ ] Guardar la conversación en Supabase con el cliente del usuario, para que
       RLS aplique — no con la secret key
@@ -89,6 +87,7 @@ TMDB, y las dos plantillas de `src/prompts/`.
 |---|---|
 | Streaming siempre en el chat, sin variante no-streaming | Regla de `CLAUDE.md`. `complete()` existe solo para clasificación y extracción internas |
 | El historial se guarda con el cliente del usuario, no con la secret key | Que RLS sea quien garantice el aislamiento, en vez de confiar en que el código filtre bien por `user_id` |
+| **El chat no razona** en `movie` y `tv`; `weekend` y `month` podrán activarlo cuando se construyan, con más `max_tokens` | `deepseek-flash` razona por defecto y esos tokens cuentan contra `max_tokens`. Medido con `system.md`, la plantilla rellena con 10 candidatos reales de `search_content`, streaming y temperatura 0.8; 3 mensajes × 2 repeticiones por configuración. **Sin razonar, 600**: primera palabra en 0,6–0,9 s, 6/6 completas. **Razonando, 600** (lo que hacía el código): 2 de 6 respuestas vacías, las dos de series, con los 600 tokens gastados en pensar. **Razonando, 3.000**: primera palabra en 1,2–6,3 s (3 de 6 por encima de los 2 s que pide esta fase), entre 83 y 1.017 tokens de razonamiento. En calidad no se vio diferencia: las tres eligen de la lista y títulos parecidos. La tarea (elegir uno de 10 candidatos ya filtrados) no necesita pensar; planificar varios días sí puede |
 
 ## Preguntas abiertas
 

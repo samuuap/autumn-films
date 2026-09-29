@@ -68,6 +68,6 @@ pendiente, las decisiones tomadas con su motivo y las preguntas abiertas.
 | [1](docs/fase-1-scaffolding.md) | Andamiaje y configuración base | ✅ |
 | [2](docs/fase-2-base-de-datos.md) | Esquema de Supabase, pgvector y RLS | ✅ |
 | [3](docs/fase-3-seed-corpus.md) | Seed del corpus desde TMDB | ✅ |
-| [4](docs/fase-4-api-chat.md) | API del chat con streaming | ⏳ |
+| [4](docs/fase-4-api-chat.md) | API del chat con streaming | 🔄 |
 | [5](docs/fase-5-frontend.md) | Frontend, ficha de contenido y auth | ⏳ |
 | [6](docs/fase-6-pulido-despliegue.md) | Pulido, i18n y despliegue | ⏳ |
