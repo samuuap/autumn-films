@@ -1,0 +1,66 @@
+@import 'tailwindcss';
+
+/* ─── Tema otoñal ────────────────────────────────────────────────────────────
+   Paleta y tipografías de CLAUDE.md, expuestas como tokens de Tailwind.
+   Prefijo `umber-` para no chocar con las escalas por defecto de Tailwind
+   (`amber-500` y compañía siguen disponibles).
+   -------------------------------------------------------------------------- */
+@theme {
+  /* Negro cálido, base de todo */
+  --color-umber-base: #0d0b08;
+  /* Capas de contenido sobre la base */
+  --color-umber-surface: #1a1510;
+  /* Acento principal — ámbar */
+  --color-umber-amber: #c8872a;
+  /* Acento secundario — siena */
+  --color-umber-sienna: #7a4e2d;
+  /* Texto principal — crema cálida */
+  --color-umber-cream: #e8ddd0;
+  /* Texto secundario — gris cálido */
+  --color-umber-ash: #8a7b6e;
+
+  /* Las variables `--font-*` las inyecta la API de fuentes de Astro */
+  --font-display: var(--font-playfair);
+  --font-sans: var(--font-inter);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  body {
+    min-height: 100dvh;
+    background-color: var(--color-umber-base);
+    color: var(--color-umber-cream);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-umber-amber) 35%, transparent);
+    color: var(--color-umber-cream);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-umber-amber);
+    outline-offset: 2px;
+  }
+}

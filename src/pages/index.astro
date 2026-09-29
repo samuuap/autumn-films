@@ -1,0 +1,51 @@
+---
+// Página de espera. El selector de los 4 modos se construye en la Fase 5;
+// esto solo verifica que el andamiaje (tema, tipografías, Tailwind) funciona.
+import Layout from '@/layouts/Layout.astro';
+import { CHAT_MODES, CHAT_MODE_DEFINITIONS } from '@/lib/types';
+---
+
+<Layout>
+  <main class="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-10 px-6 py-20">
+    <header class="space-y-4">
+      <p class="text-umber-amber text-xs font-medium tracking-[0.25em] uppercase">Proyecto</p>
+      <h1 class="font-display text-6xl leading-none font-semibold">Umber</h1>
+      <p class="text-umber-ash max-w-md text-lg leading-relaxed">
+        Un cinéfilo que escucha cómo te sientes y te devuelve la película exacta para este otoño.
+      </p>
+    </header>
+
+    <section aria-labelledby="modos" class="space-y-4">
+      <h2 id="modos" class="text-umber-ash text-xs font-medium tracking-[0.2em] uppercase">
+        Modos
+      </h2>
+      <ul class="divide-umber-surface divide-y">
+        {
+          CHAT_MODES.map((mode) => {
+            const definition = CHAT_MODE_DEFINITIONS[mode];
+            return (
+              <li class="flex items-baseline justify-between gap-6 py-3">
+                <div>
+                  <span class="font-display text-xl">{definition.label}</span>
+                  <p class="text-umber-ash text-sm">{definition.description}</p>
+                </div>
+                <span
+                  class:list={[
+                    'shrink-0 rounded-full border px-2.5 py-0.5 text-[0.7rem] tracking-wide uppercase',
+                    definition.available
+                      ? 'border-umber-amber/40 text-umber-amber'
+                      : 'border-umber-surface text-umber-ash',
+                  ]}
+                >
+                  {definition.available ? 'MVP' : 'v2'}
+                </span>
+              </li>
+            );
+          })
+        }
+      </ul>
+    </section>
+
+    <footer class="text-umber-ash text-xs">Fase 1 — andamiaje y configuración base.</footer>
+  </main>
+</Layout>

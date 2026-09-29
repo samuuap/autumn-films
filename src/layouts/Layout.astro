@@ -1,0 +1,36 @@
+---
+import { Font } from 'astro:assets';
+
+import '@/styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'Umber — planificador cinematográfico otoñal',
+  description = 'Cuéntale a Umber cómo te sientes y te encuentra la película o la serie que encaja con ese otoño.',
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0d0b08" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+
+    <Font cssVariable="--font-playfair" preload />
+    <Font cssVariable="--font-inter" preload />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>
