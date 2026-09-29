@@ -50,10 +50,15 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │       └── global.css       # Tailwind + tema otoñal
 ├── scripts/
 │   ├── verify-schema.mjs    # Comprueba esquema y RLS vía Data API
+│   ├── embeddings/
+│   │   └── server.py        # Qwen3-Embedding local con la API de OpenAI (sin Docker)
 │   └── seed/
-│       ├── fetch-tmdb.py    # Descarga películas/series de TMDB
-│       ├── embed.py         # Vectoriza sinopsis + keywords con Qwen3
-│       └── load-db.py       # Carga vectores en Supabase pgvector
+│       ├── common.py        # Entorno, HTTP, JSONL y el texto canónico de cada título
+│       ├── fetch-tmdb.py    # Descarga el universo de candidatos de TMDB
+│       ├── score.py         # autumn_score (heurística + deepseek-flash) y selección
+│       ├── embed.py         # Vectoriza el corpus con Qwen3
+│       ├── load-db.py       # Upsert del corpus en Supabase pgvector
+│       └── search.py        # Búsquedas de control contra el corpus cargado
 ├── supabase/
 │   ├── config.toml          # Configuración del CLI
 │   └── migrations/          # Esquema versionado, en orden de aplicación
@@ -108,6 +113,7 @@ npm run dev        # Desarrollo local
 npm run build      # Build de producción
 npm run preview    # Preview del build
 npm run typecheck  # astro check
+npm run embeddings # Qwen3-Embedding local en EMBEDDINGS_URL (necesita .venv, ver seed)
 
 # Base de datos (migraciones versionadas en supabase/migrations/)
 npx supabase login                                  # una vez, abre el navegador
@@ -117,13 +123,19 @@ npm run db:verify  # comprueba esquema, RLS y restricciones vía Data API
 npm run db:verify-rls  # comprueba el aislamiento entre dos usuarios reales
 npm run db:types   # regenera src/lib/database.types.ts desde el esquema real
 
-# Seed del corpus (una vez, o para actualizaciones)
-cd scripts/seed
-pip install -r requirements.txt
-python fetch-tmdb.py   # ~5000 títulos de TMDB
-python embed.py        # Genera embeddings
-python load-db.py      # Carga en Supabase
+# Seed del corpus (una vez, o para actualizaciones). Python ≥ 3.10: el del sistema es 3.9
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r scripts/embeddings/requirements.txt -r scripts/seed/requirements.txt
+npm run embeddings                  # en otra terminal
+python scripts/seed/fetch-tmdb.py   # universo de ~17.000 títulos de TMDB
+python scripts/seed/score.py        # autumn_score y selección de los ~5.000
+python scripts/seed/embed.py        # vectoriza el corpus
+python scripts/seed/load-db.py      # upsert en Supabase (--prune borra lo que sobra)
+python scripts/seed/search.py "tarde de lluvia"   # búsquedas de control
 ```
+
+Todos los pasos cachean en `scripts/seed/data/` (ignorado en git): se reanudan
+tras un corte y reejecutarlos no repite llamadas ni duplica filas.
 
 ---
 
@@ -163,6 +175,19 @@ CREATE TABLE content (
 -- ~50 filas por lista y degradaría la recuperación.
 CREATE INDEX ON content USING hnsw (embedding vector_cosine_ops);
 ```
+
+Qué contiene cada columna, tal como la rellena el seed:
+
+- `title` y `synopsis` en español (es-ES, o si no otra variante del español);
+  `title_en` y `synopsis_en` en inglés. Todo título tiene al menos una de las
+  dos sinopsis
+- `genres` en español, para mostrar. `keywords` en inglés: TMDB no las traduce
+- `director`: en series, quien la crea (`created_by`), que es el equivalente
+- `autumn_score` entre 0 y 1: la puntuación de deepseek-flash (0–100) / 100.
+  Decide qué entra al corpus y sirve para reordenar candidatos en el chat
+- `embedding`: de un texto en inglés (título, sinopsis, géneros y keywords),
+  con la sinopsis española solo si falta la inglesa. Lo construye
+  `document_text()` en `scripts/seed/common.py`
 
 ### `users_favorites`
 
@@ -208,8 +233,8 @@ LANGUAGE plpgsql STABLE
 SET search_path = public, extensions
 ```
 
-La implementación está en `supabase/migrations/`, que es la fuente real. Tres
-cosas de su comportamiento que no se ven en la firma:
+La implementación está en `supabase/migrations/`, que es la fuente real. Lo que
+no se ve en la firma:
 
 - Es **PL/pgSQL y no SQL** solo para poder lanzar un error si el vector no tiene
   1024 dimensiones. Postgres **no** aplica los modificadores de tipo a los
@@ -217,6 +242,12 @@ cosas de su comportamiento que no se ven en la firma:
   vector de otra dimensión entraría y la consulta devolvería 0 filas en silencio
 - Descarta las filas con `embedding IS NULL`
 - Limita `match_count` a 50: está expuesta por PostgREST a `anon`
+- Lleva `SET hnsw.iterative_scan = strict_order`. Sin él, el índice HNSW devuelve
+  como mucho 40 filas (`ef_search`) y el filtro por tipo se aplica después: con
+  solo 500 series, las búsquedas de `tv` se quedaban en 2 o 3 candidatos. No
+  quitarlo, y si se recrea la función, volver a ponerlo
+- El `min_score` por defecto (0.5) es alto para este modelo: resultados buenos
+  caen entre 0,45 y 0,6
 
 ---
 
@@ -281,7 +312,12 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
 - Temperature chat: `0.8`
 - Temperature clasificación/extracción: `0.1`
 - Max tokens respuesta: `600`
-- Usar streaming siempre para mejor UX
+- Usar streaming siempre para mejor UX. La excepción son los procesos por lotes
+  (`scripts/seed/score.py`), donde nadie lee la respuesta mientras llega
+- `deepseek-flash` **razona por defecto**, y los tokens del razonamiento cuentan
+  contra `max_tokens`: con un tope bajo la respuesta llega vacía o cortada. Se
+  desactiva con `thinking: { type: 'disabled' }` en el cuerpo de la petición
+  (`extra_body` en el SDK de Python)
 
 ---
 
@@ -290,16 +326,22 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
 - Modelo: `Qwen/Qwen3-Embedding-0.6B` (1024 dim nativas, 32k de contexto, 100+ idiomas)
 - Se habla con él por la API de embeddings de OpenAI: TEI y vLLM la exponen igual,
   así que pasar de local a gestionado es cambiar `EMBEDDINGS_URL`
-- Levantarlo en local:
+- Levantarlo en local con `npm run embeddings` (`scripts/embeddings/server.py`,
+  sentence-transformers sobre MPS/CUDA/CPU). Con Docker, TEI es equivalente:
   ```bash
   docker run -p 8080:80 ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
     --model-id Qwen/Qwen3-Embedding-0.6B
   ```
+- El servidor carga el modelo en **float32** a propósito: transformers usa por
+  defecto el bfloat16 del checkpoint, y eso mete ruido de ~1e-3 que hace que el
+  mismo texto dé vectores distintos según el lote en el que vaya
 - El modelo es **asimétrico**: la consulta va envuelta en
   `Instruct: {tarea}\nQuery:{texto}` y el documento en crudo. Omitir la
   instrucción cuesta entre un 1% y un 5% de precisión de recuperación
-- Vectorizar siempre vía `src/lib/embeddings.ts`: `embedQuery()` para el mensaje
-  del usuario, `embedDocuments()` para el corpus
+- Consultas vía `embedQuery()` en `src/lib/embeddings.ts`; el corpus, vía
+  `scripts/seed/embed.py`. La normalización y la instrucción de tarea están
+  duplicadas en `scripts/seed/common.py` y **tienen que coincidir** con las de
+  TypeScript: si divergen, la búsqueda se degrada sin dar ningún error
 - Cambiar de modelo o de dimensión obliga a reindexar el corpus completo
 
 ---

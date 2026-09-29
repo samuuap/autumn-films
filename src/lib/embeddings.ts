@@ -6,12 +6,12 @@
  * la que exponen tanto Text Embeddings Inference como vLLM: cambiar de local a un
  * endpoint gestionado es cambiar `EMBEDDINGS_URL`, nada más.
  *
- * Levantar el modelo en local (ver README):
- *   docker run -p 8080:80 ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
- *     --model-id Qwen/Qwen3-Embedding-0.6B
+ * Levantar el modelo en local: `npm run embeddings` (ver README).
  *
- * Todo el proyecto vectoriza a través de este módulo. Cambiar de modelo o de
- * dimensión obliga a reindexar el corpus completo.
+ * Las consultas se vectorizan aquí; el corpus, en `scripts/seed/embed.py`. La
+ * normalización y la instrucción están duplicadas en `scripts/seed/common.py` y
+ * tienen que coincidir. Cambiar de modelo o de dimensión obliga a reindexar el
+ * corpus completo.
  */
 import OpenAI from 'openai';
 

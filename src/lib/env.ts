@@ -26,7 +26,7 @@ export const env = {
     apiKey: DEEPSEEK_API_KEY,
   },
   embeddings: {
-    /** Endpoint OpenAI-compatible. En local, el contenedor de TEI o vLLM. */
+    /** Endpoint OpenAI-compatible. En local, `npm run embeddings` o el contenedor de TEI. */
     url: EMBEDDINGS_URL,
     /** Opcional: solo si el servicio está autenticado. */
     apiKey: EMBEDDINGS_API_KEY,

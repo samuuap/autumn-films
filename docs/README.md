@@ -10,7 +10,7 @@ La documentación **técnica** (stack, esquema, convenciones, estética) está e
 |---|---|---|
 | [1](fase-1-scaffolding.md) | Scaffolding y configuración base | ✅ Completada |
 | [2](fase-2-base-de-datos.md) | Base de datos: esquema, pgvector y RLS | ✅ Completada |
-| [3](fase-3-seed-corpus.md) | Seed del corpus desde TMDB | ⏳ Pendiente |
+| [3](fase-3-seed-corpus.md) | Seed del corpus desde TMDB | ✅ Completada |
 | [4](fase-4-api-chat.md) | API del chat con streaming | ⏳ Pendiente |
 | [5](fase-5-frontend.md) | Frontend, ficha de contenido y auth | ⏳ Pendiente |
 | [6](fase-6-pulido-despliegue.md) | Pulido, i18n y despliegue | ⏳ Pendiente |
@@ -33,6 +33,13 @@ su fase.
 | Variables de entorno con `astro:env` en vez de `import.meta.env` | Valida en build que no falte ninguna y hace imposible que un secreto de servidor entre en el bundle de cliente | 1, 4, 5 |
 | Esquema versionado en `supabase/migrations/` con el CLI de Supabase | El esquema queda en el repo, revisable en diff y reproducible tras cada reindexado del corpus | 2, 3 |
 | Índice vectorial HNSW en lugar de ivfflat | Sin listas que dimensionar, mejor recall, y se crea sobre la tabla vacía. A 5.000 filas el `lists = 100` del diseño original degradaría la recuperación | 2, 4 |
+| `search_content` con `hnsw.iterative_scan = strict_order` | Sin ella, el índice devolvía como mucho 40 filas y el filtro por tipo actuaba después: con el plan genérico, 295 de 300 búsquedas de series se quedaban cortas, alguna con 0. Medido y corregido en la Fase 3 | 2, 3, 4 |
+| `autumn_score` = puntuación 0–100 de deepseek-flash / 100, con prefiltro heurístico | La heurística sola es tosca y el LLM solo gasta llamadas en blockbusters obvios. Se cachea con un hash del prompt, así que el corpus es reproducible | 3, 4 |
+| `autumn_score` filtra el corpus **y** reordena en el chat | Umber solo conoce títulos otoñales, y dentro de ellos los más otoñales pesan más | 3, 4 |
+| Corpus 90/10: 4.500 películas y 500 series | Decisión de producto. TMDB tiene muchas menos series con votos suficientes | 3, 4, 5 |
+| Documentos vectorizados en inglés, con respaldo en español | TMDB solo tiene keywords en inglés y sus sinopsis inglesas son más completas. La recuperación con consultas en español funciona | 3, 4, 6 |
+| Embeddings locales con un servidor Python propio (`npm run embeddings`) | No hay Docker, y Docker Desktop exige licencia de pago en una empresa grande. Habla la misma API que TEI, así que el código TypeScript no cambia | 3, 4, 6 |
+| deepseek-flash razona por defecto; en procesos por lotes se desactiva | El razonamiento cuenta contra `max_tokens` y dejaba vacías las respuestas de la puntuación. Si el chat razona o no queda para la Fase 4 | 3, 4 |
 
 ---
 
@@ -42,14 +49,13 @@ Ordenadas por la fase que las bloquea. El detalle está en cada archivo.
 
 | # | Pregunta | Bloquea |
 |---|---|---|
-| 1 | ¿Cuánto degrada el filtro por tipo a la búsqueda vectorial? Medir con corpus | [Fase 3](fase-3-seed-corpus.md) |
-| 2 | ¿Debe `anon` poder leer la columna `embedding`? | [Fase 2](fase-2-base-de-datos.md) |
-| 3 | ¿Cómo se define «otoñal» y cómo se calcula `autumn_score`? | [Fase 3](fase-3-seed-corpus.md) |
-| 4 | ¿Vectorizamos la sinopsis española, la inglesa o ambas? | [Fase 3](fase-3-seed-corpus.md) |
-| 5 | ¿Qué historial ve un usuario sin cuenta, si no hay `localStorage`? | [Fase 4](fase-4-api-chat.md) |
-| 6 | ¿Auth por SSR con cookies o cliente de Supabase en el navegador? | [Fase 5](fase-5-frontend.md) |
-| 7 | ¿Isla de framework para el chat o JavaScript a pelo? | [Fase 5](fase-5-frontend.md) |
-| 8 | ¿Dónde corre el servicio de embeddings en producción? | [Fase 6](fase-6-pulido-despliegue.md) |
+| 1 | ¿Debe `anon` poder leer la columna `embedding`? | [Fase 2](fase-2-base-de-datos.md) |
+| 2 | `autumn_score` varía según el lote en la franja media: ¿puntuar varias veces y promediar? ([detalle](fase-3-seed-corpus.md)) | [Fase 4](fase-4-api-chat.md) |
+| 3 | La instrucción de la consulta dice «autumnal» y sesga hacia títulos con «otoño»: ¿cambiarla? ([detalle](fase-3-seed-corpus.md)) | [Fase 4](fase-4-api-chat.md) |
+| 4 | ¿Qué historial ve un usuario sin cuenta, si no hay `localStorage`? | [Fase 4](fase-4-api-chat.md) |
+| 5 | ¿Auth por SSR con cookies o cliente de Supabase en el navegador? | [Fase 5](fase-5-frontend.md) |
+| 6 | ¿Isla de framework para el chat o JavaScript a pelo? | [Fase 5](fase-5-frontend.md) |
+| 7 | ¿Dónde corre el servicio de embeddings en producción? | [Fase 6](fase-6-pulido-despliegue.md) |
 
 ---
 

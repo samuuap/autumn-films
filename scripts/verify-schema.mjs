@@ -65,7 +65,7 @@ for (const table of ['content', 'users_favorites', 'conversations']) {
     body: { query_embedding: vector, content_type: 'movie', match_count: 5, min_score: 0.0 },
   });
   record(status === 200, 'search_content responde a un vector de 1024 dim',
-    status === 200 ? `${Array.isArray(body) ? body.length : '?'} filas (corpus vacío)` : JSON.stringify(body));
+    status === 200 ? `${Array.isArray(body) ? body.length : '?'} filas` : JSON.stringify(body));
 }
 
 {

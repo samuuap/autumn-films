@@ -77,7 +77,8 @@ Aplicado sobre el proyecto `autumn-films` (Postgres 17.6, `eu-west-1`) con
 | Migraciones versionadas con el **CLI de Supabase** | El esquema queda en el repo, revisable en diff y reproducible. Para un proyecto que va a reindexar el corpus más de una vez, compensa frente a aplicar SQL a mano en el dashboard |
 | `unique (tmdb_id, type)` en vez de `tmdb_id unique` | TMDB numera películas y series en espacios independientes: `/movie/550` y `/tv/550` son obras distintas. Con la unicidad solo sobre `tmdb_id`, el seed de la Fase 3 habría rechazado series por colisionar con el id de una película. Los ids bajos colisionan con casi total seguridad |
 | El tipo `vector` y la opclass van cualificados como `extensions.…` | No puedo aplicar las migraciones para probarlas, así que el DDL no debe depender de que `extensions` esté en el `search_path` de la sesión que las aplica |
-| **No** fijar `hnsw.ef_search` en la función | Sería lo indicado contra el filtrado posterior, pero ese GUC solo existe si la biblioteca de pgvector está cargada en la sesión, y la migración podría fallar al crear la función. Es el primer parámetro que tocar cuando haya corpus para medir |
+| **No** fijar `hnsw.ef_search` en la función | Sería lo indicado contra el filtrado posterior, pero ese GUC solo existe si la biblioteca de pgvector está cargada en la sesión, y la migración podría fallar al crear la función. Es el primer parámetro que tocar cuando haya corpus para medir. **Superada en la Fase 3**: ver la fila siguiente |
+| `hnsw.iterative_scan = strict_order` en `search_content` (Fase 3, migración `20260929235200`) | Resuelve la pregunta abierta 1. Medido con el corpus: con el plan genérico que PL/pgSQL acaba usando en las conexiones de PostgREST, 295 de 300 búsquedas de series se quedaban cortas (2,67 filas de media), y sin filtro nunca pasaba de 40. La búsqueda iterativa de pgvector 0.8.2 lo resuelve sin tocar `ef_search`. La migración carga antes la biblioteca para que el parámetro se valide contra su definición real, que era el riesgo de la fila anterior. Detalle en la [Fase 3](fase-3-seed-corpus.md) |
 | `set search_path = public, extensions` en las funciones | Evita el secuestro de resolución de nombres y garantiza que el operador `<=>` de pgvector resuelva |
 | `where embedding is not null` en `search_content` | Una fila sin vectorizar no debe aparecer nunca como candidata |
 | Tope de `match_count` a 50 dentro de la función | Está expuesta por PostgREST a `anon`: sin límite, una sola llamada podría volcar el corpus |
@@ -89,14 +90,9 @@ Aplicado sobre el proyecto `autumn-films` (Postgres 17.6, `eu-west-1`) con
 
 ## Preguntas abiertas
 
-**1. ¿Cuánto degrada el filtro posterior a la búsqueda vectorial?**
-No se puede responder sin corpus. Con datos reales (Fase 3) hay que mirar con
-`explain analyze` si `search_content` devuelve de verdad `match_count` filas al
-filtrar por tipo. Si se queda corta, las salidas son subir más `hnsw.ef_search`,
-crear índices HNSW parciales por tipo, o pedir más candidatos y filtrar en la
-aplicación. Nota aparte: con 5.000 filas el planificador puede elegir un recorrido
-secuencial exacto en lugar del índice, y eso **no es un problema** — da recall
-perfecto y a este tamaño cuesta milisegundos.
+**1. ~~¿Cuánto degrada el filtro posterior a la búsqueda vectorial?~~**
+Resuelta en la Fase 3: mucho, y se corrigió con `hnsw.iterative_scan`. Ver la
+tabla de decisiones.
 
 **2. ¿Debe `anon` poder leer la columna `embedding`?**
 La política de lectura del corpus permite `select` sobre todas las columnas, así
@@ -108,6 +104,6 @@ conviene decidirlo antes de abrir al público.
 ## Verificación
 
 ```bash
-npm run db:verify   # 15/15 cuando las migraciones estén aplicadas
+npm run db:verify   # 18/18 con las migraciones aplicadas
 npm run db:types    # el esquema real debe coincidir con database.types.ts
 ```

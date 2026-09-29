@@ -1,7 +1,7 @@
 # Fase 4 — API del chat
 
 **Estado:** ⏳ Pendiente
-**Depende de:** [Fase 3](fase-3-seed-corpus.md) ⏳ — sin corpus no hay candidatos
+**Depende de:** [Fase 3](fase-3-seed-corpus.md) ✅ — sin corpus no hay candidatos
 **Actualizado:** 2026-09-29
 
 ## Objetivo
@@ -26,10 +26,33 @@ TMDB, y las dos plantillas de `src/prompts/`.
       que distingue una consulta de un documento
 - [ ] `search_content` con `content_type` según el modo (`movie` → `'movie'`,
       `tv` → `'tv'`)
+- [ ] **Bajar `min_score`.** El 0.5 por defecto de la función es demasiado alto
+      para este modelo: en las búsquedas de control de la Fase 3, resultados
+      buenos caen entre 0,45 y 0,59, y con 0.5 la consulta *«está lloviendo y
+      estoy melancólico»* se quedaría con 2 candidatos de 10. Medir un umbral
+      que separe «nada encaja» de «encaja flojo»; `search.py` pide sin umbral
+      para ver los valores reales
+- [ ] **Reordenar con `autumn_score`**, que es lo que se decidió en la Fase 3
+      (filtrar y ordenar): pedir más candidatos de los que se pasan al modelo y
+      combinar similitud y `autumn_score`. El score tiene ruido en la franja
+      media (pregunta 1 de la Fase 3), así que su peso debería ser moderado
+- [ ] **Revisar `EMBEDDING_TASK`.** Dice «retrieve the autumnal film», pero todo
+      el corpus ya es otoñal, así que esa palabra no filtra nada y sesga hacia
+      títulos con «otoño» en el nombre (pregunta 2 de la Fase 3). Cambiarla no
+      obliga a reindexar, pero sí a cambiar también `scripts/seed/common.py`
 - [ ] Enriquecer los candidatos con TMDB (`append_to_response=watch/providers`)
 - [ ] Renderizar `src/prompts/user-context.md` sustituyendo las `{{variables}}`
       que el propio archivo documenta
 - [ ] Llamada a `deepseek-flash` con `system.md` + contexto + historial
+- [ ] **Decidir si el chat razona.** `deepseek-flash` razona por defecto y esos
+      tokens cuentan contra `max_tokens`. Medido en la Fase 3: 463 tokens de
+      razonamiento para puntuar **un** título, y con 25 títulos y
+      `max_tokens: 1000` la respuesta llegó vacía. Hoy `streamChat` y `complete`
+      en `src/lib/deepseek.ts` no lo desactivan, y con el tope de 600 el chat
+      devolvería respuestas vacías o cortadas. Además, el razonamiento retrasa el
+      primer token de texto, y la verificación de esta fase pide que el stream
+      empiece antes de dos segundos. O se desactiva
+      (`thinking: { type: 'disabled' }`) o se sube el tope y se asume la latencia
 - [ ] Devolver el stream al cliente
 - [ ] Guardar la conversación en Supabase con el cliente del usuario, para que
       RLS aplique — no con la secret key

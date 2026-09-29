@@ -82,7 +82,14 @@ servicio externo alcanzable. Opciones:
   corpus está indexado con uno
 
 El diseño ya absorbe cualquiera de las dos primeras cambiando `EMBEDDINGS_URL`,
-porque hablamos con el servicio por la API de embeddings de OpenAI.
+porque hablamos con el servicio por la API de embeddings de OpenAI. Para la
+primera, `scripts/embeddings/server.py` ya sirve como contenedor.
+
+Aviso de la Fase 3: incluso con el **mismo** modelo, el servicio de producción
+tiene que dar los mismos vectores que el que indexó el corpus. En local, cargar
+el modelo en bfloat16 en vez de float32 ya los desviaba. Antes de apuntar
+`EMBEDDINGS_URL` a otro servicio, comparar su salida con la matriz de referencia
+de la ficha del modelo y con unos cuantos vectores del corpus cargado.
 
 **2. ¿Región de despliegue?**
 El público objetivo es España. Conviene que la función de Vercel, el proyecto de

@@ -67,10 +67,10 @@ las fases siguientes solo tengan que usarlos.
 
 ## Pendiente
 
-- [ ] Rellenar `.env.local` con credenciales reales de DeepSeek, Supabase y
-      TMDB. Ahora lleva `REPLACE_ME` en cada una
-- [ ] Levantar el contenedor de embeddings en local para poder probar la
-      vectorización (ver [Fase 3](fase-3-seed-corpus.md))
+- [x] Rellenar `.env.local` con credenciales reales de DeepSeek, Supabase y
+      TMDB. Comprobadas contra las cuatro APIs en la Fase 3
+- [x] Levantar los embeddings en local para poder probar la vectorización. Sin
+      Docker: `npm run embeddings` (ver [Fase 3](fase-3-seed-corpus.md))
 
 ## Decisiones tomadas
 

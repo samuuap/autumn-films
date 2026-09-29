@@ -1,7 +1,7 @@
 # Fase 3 — Seed del corpus
 
-**Estado:** ⏳ Pendiente
-**Depende de:** [Fase 2](fase-2-base-de-datos.md) ⏳ — hace falta el esquema creado
+**Estado:** ✅ Completada
+**Depende de:** [Fase 2](fase-2-base-de-datos.md) ✅
 **Actualizado:** 2026-09-29
 
 ## Objetivo
@@ -12,93 +12,138 @@ lo que no entre en el corpus, no existe para él.
 
 ## Hecho
 
-Nada todavía. `scripts/seed/` está creado y vacío.
-
-## Pendiente
-
 ### Infraestructura local
 
-- [ ] Levantar el servicio de embeddings:
-      ```bash
-      docker run -p 8080:80 ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
-        --model-id Qwen/Qwen3-Embedding-0.6B
-      ```
-- [ ] `scripts/seed/requirements.txt`
-- [ ] Nota: el Python del sistema es 3.9. Conviene un entorno virtual con una
-      versión más reciente antes de instalar dependencias
+- [x] Entorno virtual con Python 3.12 en `.venv/`: el del sistema es 3.9
+- [x] `scripts/embeddings/server.py` (`npm run embeddings`): Qwen3-Embedding con
+      la API de embeddings de OpenAI, sobre sentence-transformers y MPS. No hay
+      Docker en la máquina
+- [x] Validado contra la matriz de similitud de la ficha del modelo: coincide en
+      los cuatro decimales, las normas dan 1 y el mismo texto da el mismo vector
+      con y sin relleno. Funciona con el SDK de Python y con el de Node, que pide
+      base64 por defecto
+- [x] `requirements.txt` en `scripts/embeddings/` y `scripts/seed/`
 
-### `fetch-tmdb.py`
+### Pipeline
 
-- [ ] Descargar ~5.000 títulos según los criterios de la pregunta 1
-- [ ] Traer `es-ES` y `en-US` en llamadas separadas, porque el esquema guarda
-      `title`/`title_en` y `synopsis`/`synopsis_en`
-- [ ] Traer `keywords` y `credits` (el director no viene en el detalle base)
-- [ ] Respetar el rate limit de TMDB con reintentos y backoff
-- [ ] Caché en `scripts/seed/data/` (ya ignorado en git) para poder reanudar sin
-      volver a descargar. Con 5.000 títulos × varias llamadas cada uno, un corte
-      a mitad sin caché significa empezar de cero
+Cuatro pasos. Cada uno cachea en `scripts/seed/data/`, se reanuda tras un corte y,
+al reejecutarlo, no repite llamadas.
 
-### `embed.py`
+- [x] `fetch-tmdb.py`: descubre por años los títulos con más votos (`/discover`
+      no pasa de 500 páginas) y trae el detalle de cada uno en **una** llamada con
+      `keywords`, `credits` y `translations`. Guarda el detalle recortado: los
+      créditos completos pesan ~75 KB por película
+- [x] `score.py`: heurística de prefiltro + deepseek-flash por lotes de 25
+- [x] `embed.py`: vectoriza sin instrucción, comprueba 1024 dimensiones y valores
+      finitos, y guarda cada vector con el hash del texto del que sale
+- [x] `load-db.py`: upsert por `(tmdb_id, type)` en lotes de 100 con la secret
+      key. `--prune` borra lo que ya no está en el corpus
+- [x] `search.py`: búsquedas de control con la publishable key, igual que un
+      cliente anónimo
 
-- [ ] Construir el texto a vectorizar (sinopsis + keywords + géneros) según la
-      decisión de la pregunta 2
-- [ ] Vectorizar **sin** instrucción: son documentos, no consultas. La
-      instrucción solo va del lado de la consulta, en `/api/chat`
-- [ ] Verificar que cada vector tiene 1024 dimensiones antes de escribirlo
-- [ ] Lotes con reanudación: guardar los vectores en disco a medida que salen
+### Números de la carga
 
-### `load-db.py`
+| Paso | Resultado |
+|---|---|
+| Descubrimiento | 22.886 películas con ≥100 votos y 6.472 series con ≥50. Universo: las 15.000 y las 2.000 más votadas |
+| Detalle | 17.000 llamadas. Recomendables: 16.996; quedan fuera 4 películas (sin sinopsis, sin estrenar o borradas de TMDB) |
+| Prefiltro | Pasan 9.000 películas y 1.000 series (el doble del objetivo) |
+| Puntuación | 400 lotes, ninguno fallido, unos 2 minutos con 8 hilos |
+| Selección | 4.500 películas y 500 series. Corte en 48/100 en los dos tipos |
+| Vectorización | 5.000 vectores en 5 minutos: reindexar es barato |
+| Carga | 5.000 filas. 0 sin `embedding`, 0 sin `synopsis_en`, 27 sin `synopsis`, 66 sin `director` (casi todo series sin `created_by`), 0 sin póster |
 
-- [ ] Cargar con la secret key, que es la que se salta RLS
-- [ ] `upsert` por `tmdb_id` para que reejecutar el script no duplique
-- [ ] Cargar por lotes, no fila a fila
-- [ ] Crear el índice vectorial **después** de la carga inicial: indexar antes
-      obliga a mantener el índice durante la inserción y es más lento
+Reparto de `autumn_score` en películas: 45 en 90–99, 258 en 80–89, 742 en 70–79,
+1.283 en 60–69, 1.949 en 50–59 y 223 en 48–49. Casi la mitad del corpus es
+«encaja razonablemente con el otoño», que es lo que da de sí pedir 4.500
+películas.
 
 ### Cierre
 
-- [ ] Contar filas y comprobar cuántas quedaron sin `embedding`, sin `director` o
-      sin `synopsis`
-- [ ] Búsquedas manuales de control: describir tres estados de ánimo distintos y
-      mirar si los diez primeros resultados tienen sentido. Es la única forma
-      real de saber si el corpus y la vectorización sirven
+- [x] Búsquedas de control con tres estados de ánimo, sin filtro de tipo:
+      - *Lluvia y melancolía* → Cuando cae el otoño, El jardín de las palabras,
+        Sonata de otoño, Las hojas muertas, Aftersun
+      - *Brujas o fantasmas* → Penny Dreadful, El club de medianoche, Al morir la
+        noche, El gabinete de curiosidades de Guillermo del Toro
+      - *Nostalgia universitaria* → Reencuentro, Diez años después, Amor y
+        letras, Los que se quedan
+
+      La búsqueda cruzada funciona: consultas en español recuperan documentos
+      vectorizados en inglés
+- [x] Medido el filtro por tipo que la Fase 2 dejó abierto, y corregido con una
+      migración (ver Decisiones)
+- [x] `npm run db:verify` 18/18 y `npm run db:verify-rls` 21/21 con el corpus
+      cargado
 
 ## Decisiones tomadas
 
 | Decisión | Motivo |
 |---|---|
 | El texto canónico que se vectoriza se construye en Python, no en TypeScript | Evita tener la misma lógica en dos lenguajes. El lado TypeScript solo vectoriza consultas, nunca documentos |
+| **`autumn_score` mixto**: heurística para descartar y deepseek-flash (0–100, temperatura 0.1) para puntuar | La heurística sola no distingue una comedia de pueblo en octubre de una de verano; el LLM solo, sobre 17.000 títulos, gasta llamadas en blockbusters obvios. La heurística se comprobó: de todo lo que descartó, solo 3 títulos tenían keywords estacionales (The Dark Knight, 9, Swamp Thing) |
+| **`autumn_score` filtra y ordena** | Entran al corpus los 5.000 mejor puntuados, así que Umber solo conoce títulos otoñales. En la Fase 4 se combina con la similitud para reordenar |
+| **Reparto 90/10**: 4.500 películas y 500 series | Decisión de producto. TMDB tiene muchas menos series con votos suficientes |
+| **Vectorizar en inglés**, con la sinopsis española solo si falta la inglesa | TMDB solo tiene keywords en inglés, sus sinopsis inglesas son más completas (faltan 2 en inglés frente a 369 en español) y es donde mejor rinde el modelo. Las búsquedas de control confirman que la recuperación cruzada funciona |
+| Texto del documento: título, año, sinopsis, géneros y hasta 20 keywords | Las keywords llevan la mayor parte de la señal otoñal («small town», «halloween», «boarding school») y no están en la sinopsis |
+| Las puntuaciones del LLM se cachean con un hash del prompt | Resuelve la objeción de que el LLM «no es reproducible»: se calcula una vez y reejecutar da el mismo corpus. Cambiar el prompt invalida la caché sola |
+| Puntuar **sin razonamiento** (`thinking: disabled`) y sin streaming | deepseek-flash razona por defecto: 463 tokens para puntuar un solo título, y con 25 la respuesta no cabía en `max_tokens`. Sin razonamiento, un lote de 25 tarda 1,6 s. Es un proceso por lotes: el streaming no aporta nada |
+| Una sola llamada de detalle por título con `translations`, en vez de una por idioma | La mitad de llamadas. `translations` trae título y sinopsis de todas las variantes de español e inglés |
+| Detalle pedido en `es-ES` | Para que `poster_path` sea el cartel español cuando exista |
+| En la traducción del idioma original, el título sale de `original_title` | TMDB la deja con el título vacío: sin esto, *Fight Club* se quedaba sin `title_en` |
+| Traducción propia de cuatro géneros de series | TMDB deja en inglés, en su lista es-ES, «Action & Adventure», «Kids», «Sci-Fi & Fantasy» y «War & Politics» |
+| `director` de una serie = sus creadores | En TMDB las series no tienen director; `created_by` es el equivalente |
+| Fuera del universo: noticias, reality, telenovela, talk shows y películas de 40 minutos o menos | No son lo que se recomienda para una tarde. 40 minutos es la definición de largometraje de la Academia |
+| Fuera también los títulos sin estrenar o sin ninguna sinopsis | Sin sinopsis no hay nada que vectorizar ni que contar al usuario |
+| Servidor de embeddings propio en Python, en lugar del contenedor de TEI | No hay Docker en la máquina, y en una empresa grande Docker Desktop exige licencia de pago. El contrato es el mismo, así que el código TypeScript no cambia |
+| Modelo cargado en **float32** | transformers 5 carga por defecto el bfloat16 del checkpoint. Con él, las normas salían en 1,0012 y el mismo texto daba vectores distintos según el lote (similitud 0,9996 consigo mismo). En float32 coincide exactamente con la ficha |
+| Se mantiene el índice HNSW durante la carga | El pendiente pedía crearlo después, pero ya existe desde la Fase 2 y, con 5.000 filas, mantenerlo durante el upsert cuesta segundos. Quitarlo y recrearlo exigiría una migración para nada |
+| **`hnsw.iterative_scan = strict_order` en `search_content`** (migración `20260929235200`) | Resuelve la pregunta 1 de la Fase 2. Un recorrido HNSW devuelve como mucho `ef_search` filas (40), y el filtro se aplica después. Con el plan genérico que PL/pgSQL acaba usando en las conexiones de PostgREST, **295 de 300 búsquedas de series se quedaban cortas: 2,67 filas de media, alguna con 0**. Sin filtro, pedir 50 devolvía 40. Con la búsqueda iterativa de pgvector 0.8.2: 10 de 10 y 50 de 50. `strict_order` mantiene el orden exacto por distancia |
 
 ## Preguntas abiertas
 
-**1. ¿Cómo se define «otoñal» y cómo se calcula `autumn_score`?**
-El esquema tiene la columna pero nada dice cómo se rellena, y es la decisión que
-más determina el carácter del producto. Posibilidades:
-- Heurística sobre géneros, keywords de TMDB y década. Barato, reproducible y
-  fácil de ajustar, pero tosco
-- Puntuar cada título con `deepseek-flash` a temperatura 0.1. Más fino, pero son
-  5.000 llamadas y el resultado no es reproducible entre ejecuciones
-- Mixto: heurística para preseleccionar un universo amplio y el LLM solo para
-  puntuar los que pasan el filtro
+**1. La puntuación del LLM varía según el lote.**
+El mismo título puntuado en dos lotes distintos:
 
-Relacionado: ¿`autumn_score` sirve para **filtrar** el corpus al descargarlo, o
-para **ordenar** dentro de los resultados de la búsqueda? No es lo mismo.
+| Título | Prueba | Pasada completa |
+|---|---|---|
+| Hocus Pocus | 98 | 98 |
+| Mamma Mia! | 5 | 5 |
+| Fantastic Mr. Fox | 78 | 72 |
+| Good Will Hunting | 55 | 68 |
+| Cuando Harry encontró a Sally | 60 | 48 |
+| El resplandor | 30 | 68 |
 
-**2. ¿Vectorizamos la sinopsis española, la inglesa o ambas?**
-Qwen3-Embedding es multilingüe y cross-lingüe, así que una consulta en español
-puede recuperar un documento vectorizado en inglés. Pero no da igual:
-- Solo español: coherente con el idioma principal, y las sinopsis en español de
-  TMDB a veces están vacías o son peores
-- Solo inglés: sinopsis más completas y consistentes, y el inglés es donde el
-  modelo rinde mejor
-- Ambas concatenadas: más contexto por título, riesgo de diluir el vector
+En los extremos es estable; en la franja media hay ruido de ±10 a ±40, justo
+donde está el corte (48). La caché hace el resultado reproducible, pero no más
+preciso. La salida natural es puntuar cada título dos o tres veces en lotes de
+composición distinta y promediar: céntimos y unos 2 minutos por pasada. Merece
+la pena antes de que el reordenado de la Fase 4 dependa de este número.
 
-Afecta a la calidad de la búsqueda en los dos idiomas de la
-[Fase 6](fase-6-pulido-despliegue.md) y no se puede cambiar sin reindexar.
+**2. La instrucción de la consulta arrastra hacia títulos con «otoño».**
+Con *«está lloviendo y estoy melancólico»*, cuatro de los diez primeros llevan
+el otoño o las estaciones en el título (*Cuando cae el otoño*, *Sonata de
+otoño*…), aunque la consulta no lo menciona. La instrucción de `EMBEDDING_TASK`
+dice «retrieve the autumnal film»: como todo el corpus ya es otoñal, esa palabra
+no filtra nada y en cambio sesga hacia coincidencias literales. Probar en la
+Fase 4 una instrucción centrada en el estado de ánimo. Afecta solo a las
+consultas: no obliga a reindexar.
+
+**3. `runtime` de las series es poco fiable.**
+TMDB ha dejado de rellenar `episode_run_time` en muchas series, y entonces se
+usa la duración del último episodio emitido: *Stranger Things* sale con 129
+minutos, que es lo que dura su final. No afecta al MVP. Importará en los modos
+`weekend` y `month`, que planifican por tiempo.
 
 ## Verificación
 
-- `SELECT count(*) FROM content` cerca de 5.000, repartido entre `movie` y `tv`
-- Ninguna fila con `embedding IS NULL`
-- `search_content` con una consulta real devuelve títulos coherentes
-- Reejecutar los tres scripts no duplica filas ni rompe nada
+- [x] `count(*)` de `content` = 5.000: 4.500 `movie` y 500 `tv`
+- [x] Ninguna fila con `embedding IS NULL`
+- [x] `search_content` con consultas reales devuelve títulos coherentes, y
+      devuelve las filas pedidas también al filtrar por tipo
+- [x] Reejecutar el pipeline no duplica filas: `fetch-tmdb.py` y `embed.py` no
+      descargan ni vectorizan nada, `score.py` no hace llamadas y produce un
+      `corpus.jsonl` idéntico byte a byte, y `load-db.py` deja las mismas 5.000
+
+```bash
+python scripts/seed/search.py --type tv "misterio en un pueblo pequeño"
+```
