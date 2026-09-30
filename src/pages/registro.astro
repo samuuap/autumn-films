@@ -1,0 +1,85 @@
+---
+/**
+ * Registro con email y contraseña. El proyecto exige confirmar el email: la
+ * cuenta no tiene sesión hasta que se abre el enlace, que vuelve a `/auth/confirm`.
+ */
+import AuthForm from '@/components/AuthForm.astro';
+import Layout from '@/layouts/Layout.astro';
+import { authErrorMessage, safeRedirectPath } from '@/lib/auth';
+
+const MIN_PASSWORD_CHARS = 8;
+
+const next = safeRedirectPath(Astro.url.searchParams.get('next'));
+if (Astro.locals.user !== null) return Astro.redirect(next);
+
+let error: string | null = null;
+let email = '';
+let sentTo: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const emailValue = form.get('email');
+  const passwordValue = form.get('password');
+  email = typeof emailValue === 'string' ? emailValue.trim() : '';
+  const password = typeof passwordValue === 'string' ? passwordValue : '';
+
+  if (email.length === 0 || password.length === 0) {
+    error = 'Escribe tu email y una contraseña.';
+  } else if (password.length < MIN_PASSWORD_CHARS) {
+    error = `La contraseña necesita al menos ${String(MIN_PASSWORD_CHARS)} caracteres.`;
+  } else {
+    const { data, error: authError } = await Astro.locals.supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${Astro.url.origin}/auth/confirm?next=${encodeURIComponent(next)}`,
+      },
+    });
+    if (authError !== null) {
+      error = authErrorMessage(authError);
+    } else if (data.session !== null) {
+      // Solo si el proyecto deja de exigir confirmación.
+      return Astro.redirect(next, 303);
+    } else {
+      // Supabase responde igual si el email ya tenía cuenta, para no revelarlo.
+      // El mensaje tampoco lo revela.
+      sentTo = email;
+    }
+  }
+  if (error !== null) Astro.response.status = 400;
+}
+---
+
+<Layout title="Crear cuenta — Umber">
+  <main class="mx-auto w-full max-w-sm flex-1 px-5 py-16">
+    <h1 class="text-3xl font-semibold">Crear cuenta</h1>
+    {
+      sentTo === null ? (
+        <>
+          <p class="text-umber-ash mt-2 text-sm leading-relaxed">
+            Para guardar tus conversaciones y tus favoritos. Sin cuenta también puedes chatear, pero
+            se pierde al recargar.
+          </p>
+          <AuthForm kind="signup" email={email} error={error} />
+          <p class="text-umber-ash mt-6 text-sm">
+            ¿Ya tienes cuenta?
+            <a
+              href={`/entrar?next=${encodeURIComponent(next)}`}
+              class="text-umber-cream underline underline-offset-4"
+            >
+              Entra
+            </a>
+          </p>
+        </>
+      ) : (
+        <div role="status" class="border-umber-sienna/60 bg-umber-surface mt-8 space-y-3 rounded-xl border p-5">
+          <p class="font-display text-xl">Revisa tu correo</p>
+          <p class="text-umber-cream/85 text-sm leading-relaxed">
+            Si <strong>{sentTo}</strong> no tenía cuenta, te hemos enviado un enlace para activarla.
+            Ábrelo en este mismo navegador y entrarás directamente.
+          </p>
+        </div>
+      )
+    }
+  </main>
+</Layout>

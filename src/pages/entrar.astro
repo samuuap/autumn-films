@@ -1,0 +1,55 @@
+---
+/** Inicio de sesión con email y contraseña. La sesión queda en cookies. */
+import AuthForm from '@/components/AuthForm.astro';
+import Layout from '@/layouts/Layout.astro';
+import { authErrorMessage, safeRedirectPath } from '@/lib/auth';
+
+const next = safeRedirectPath(Astro.url.searchParams.get('next'));
+if (Astro.locals.user !== null) return Astro.redirect(next);
+
+/** Errores que llegan en la URL desde `/auth/confirm`. */
+const LINK_ERRORS: Readonly<Record<string, string>> = {
+  enlace:
+    'El enlace ha caducado o ya se ha usado. Si ya confirmaste la cuenta, entra; si no, regístrate otra vez.',
+};
+
+let error: string | null = LINK_ERRORS[Astro.url.searchParams.get('error') ?? ''] ?? null;
+let email = '';
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const emailValue = form.get('email');
+  const passwordValue = form.get('password');
+  email = typeof emailValue === 'string' ? emailValue.trim() : '';
+  const password = typeof passwordValue === 'string' ? passwordValue : '';
+
+  if (email.length === 0 || password.length === 0) {
+    error = 'Escribe tu email y tu contraseña.';
+  } else {
+    const { error: authError } = await Astro.locals.supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (authError === null) return Astro.redirect(next, 303);
+    error = authErrorMessage(authError);
+  }
+  Astro.response.status = 400;
+}
+---
+
+<Layout title="Entrar — Umber">
+  <main class="mx-auto w-full max-w-sm flex-1 px-5 py-16">
+    <h1 class="text-3xl font-semibold">Entrar</h1>
+    <p class="text-umber-ash mt-2 text-sm leading-relaxed">
+      Con cuenta, Umber guarda tus conversaciones y lo que marques como favorito.
+    </p>
+    <AuthForm kind="login" email={email} error={error} />
+    <p class="text-umber-ash mt-6 text-sm">
+      ¿No tienes cuenta?
+      <a
+        href={`/registro?next=${encodeURIComponent(next)}`}
+        class="text-umber-cream underline underline-offset-4">Regístrate</a
+      >
+    </p>
+  </main>
+</Layout>

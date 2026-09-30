@@ -1,0 +1,159 @@
+---
+/**
+ * Chat con Umber.
+ *
+ *   /chat?mode=movie            conversación nueva
+ *   /chat?conversation=<uuid>   conversación guardada (exige sesión)
+ *
+ * El modo va en la URL para que la página se pueda compartir y recargar. La
+ * lógica del navegador está en `src/scripts/chat.ts`.
+ */
+import ChatMessage from '@/components/ChatMessage.astro';
+import ContentCard from '@/components/ContentCard.astro';
+import Layout from '@/layouts/Layout.astro';
+import { UUID_PATTERN } from '@/lib/api';
+import { loadConversation, type StoredConversation } from '@/lib/conversations';
+import { NotFoundError } from '@/lib/errors';
+import { listFavoriteIds } from '@/lib/favorites';
+import {
+  CHAT_MODE_DEFINITIONS,
+  MAX_MESSAGE_CHARS,
+  isAvailableChatMode,
+  type ChatMode,
+} from '@/lib/types';
+
+const { user, supabase } = Astro.locals;
+const conversationParam = Astro.url.searchParams.get('conversation');
+
+let conversation: StoredConversation | null = null;
+if (conversationParam !== null) {
+  if (user === null) {
+    return Astro.redirect(`/entrar?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`);
+  }
+  if (!UUID_PATTERN.test(conversationParam)) return Astro.redirect('/conversaciones');
+  try {
+    conversation = await loadConversation(supabase, conversationParam);
+  } catch (error: unknown) {
+    if (error instanceof NotFoundError) return Astro.redirect('/conversaciones');
+    throw error;
+  }
+}
+
+const modeParam = conversation?.mode ?? Astro.url.searchParams.get('mode');
+if (!isAvailableChatMode(modeParam)) return Astro.redirect('/');
+const mode: ChatMode = modeParam;
+const definition = CHAT_MODE_DEFINITIONS[mode];
+
+const favoriteIds = user === null ? [] : await listFavoriteIds(supabase);
+const messages = conversation?.messages ?? [];
+
+const SUGGESTIONS: Readonly<Record<'movie' | 'tv', readonly string[]>> = {
+  movie: [
+    'Está lloviendo y estoy melancólico',
+    'Quiero pasar miedo esta noche',
+    'Algo tranquilo para una tarde de domingo',
+    'Acabo de romper con mi pareja',
+  ],
+  tv: [
+    'Misterio en un pueblo pequeño',
+    'Algo reconfortante para ver a trozos',
+    'Brujas, magia y un poco de miedo',
+    'Una historia de familia que me enganche',
+  ],
+};
+const suggestions = mode === 'movie' || mode === 'tv' ? SUGGESTIONS[mode] : [];
+---
+
+<Layout title={`${definition.label} — Umber`} footer={false}>
+  <main
+    data-chat
+    data-mode={mode}
+    data-conversation-id={conversation?.id ?? ''}
+    data-favorites={JSON.stringify(favoriteIds)}
+    class="mx-auto flex w-full max-w-3xl flex-1 flex-col px-5"
+  >
+    <header class="flex items-end justify-between gap-4 py-6">
+      <div>
+        <p class="text-umber-amber text-xs font-medium tracking-[0.25em] uppercase">Modo</p>
+        <h1 class="text-3xl font-semibold">{definition.label}</h1>
+      </div>
+      <a href="/" class="text-umber-ash hover:text-umber-cream text-sm underline underline-offset-4">
+        Cambiar de modo
+      </a>
+    </header>
+
+    <section aria-label="Conversación" class="flex-1 pb-6">
+      <div data-empty-state hidden={messages.length > 0} class="space-y-5 py-6">
+        <p class="font-display text-umber-cream/90 text-2xl leading-snug">
+          ¿Cómo te sientes hoy? Cuéntamelo con tus palabras y te busco algo que encaje.
+        </p>
+        <div class="space-y-2">
+          <p class="text-umber-ash text-xs tracking-[0.15em] uppercase">O empieza por aquí</p>
+          <ul class="flex flex-wrap gap-2">
+            {
+              suggestions.map((suggestion) => (
+                <li>
+                  <button
+                    type="button"
+                    data-suggestion
+                    class="border-umber-sienna/70 hover:border-umber-amber hover:text-umber-cream text-umber-cream/85 rounded-full border px-3.5 py-1.5 text-sm transition-colors"
+                  >
+                    {suggestion}
+                  </button>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+      </div>
+
+      <ol data-messages aria-live="polite" aria-busy="false" class="space-y-8">
+        {messages.map((message) => <ChatMessage role={message.role === 'user' ? 'user' : 'assistant'} text={message.content} />)}
+      </ol>
+    </section>
+
+    <form
+      data-composer
+      class="bg-umber-base/95 border-umber-surface sticky bottom-0 -mx-5 border-t px-5 pt-3 pb-4 backdrop-blur supports-[backdrop-filter]:bg-umber-base/80"
+    >
+      <label for="mensaje" class="sr-only">Cuéntale a Umber cómo te sientes</label>
+      <div class="border-umber-sienna/60 focus-within:border-umber-amber bg-umber-surface flex items-end gap-2 rounded-2xl border p-2 transition-colors">
+        <textarea
+          id="mensaje"
+          name="message"
+          rows="2"
+          maxlength={MAX_MESSAGE_CHARS}
+          required
+          placeholder="Está lloviendo y me apetece algo que abrace…"
+          class="placeholder:text-umber-ash/80 max-h-48 min-h-12 flex-1 resize-none bg-transparent px-2 py-1.5 leading-relaxed focus:outline-none"
+        ></textarea>
+        <button
+          type="button"
+          data-stop
+          hidden
+          class="border-umber-sienna text-umber-cream hover:border-umber-amber rounded-xl border px-3.5 py-2 text-sm font-medium"
+        >
+          Detener
+        </button>
+        <button
+          type="submit"
+          data-send
+          class="bg-umber-amber text-umber-base hover:bg-umber-amber/90 disabled:bg-umber-sienna/60 disabled:text-umber-cream/60 rounded-xl px-4 py-2 text-sm font-semibold transition-colors"
+        >
+          Enviar
+        </button>
+      </div>
+      <p class="text-umber-ash mt-2 hidden text-xs sm:block">
+        Intro para enviar · Mayúsculas + Intro para un salto de línea
+      </p>
+    </form>
+
+    <template data-template="user"><ChatMessage role="user" /></template>
+    <template data-template="assistant"><ChatMessage role="assistant" /></template>
+    <template data-template="card"><ContentCard /></template>
+  </main>
+</Layout>
+
+<script>
+  import '@/scripts/chat';
+</script>

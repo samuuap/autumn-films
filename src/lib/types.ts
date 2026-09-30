@@ -142,6 +142,69 @@ export function isChatRole(value: unknown): value is ChatRole {
   return value === 'system' || value === 'user' || value === 'assistant';
 }
 
+// ─── API del chat ────────────────────────────────────────────────────────────
+
+/** Un estado de ánimo cabe de sobra; más es pegar documentos, no conversar. */
+export const MAX_MESSAGE_CHARS = 1000;
+/** Mensajes de historial que acepta el endpoint. El navegador recorta a esta cifra. */
+export const MAX_HISTORY_MESSAGES = 40;
+
+/** Cuerpo de `POST /api/chat`. Lo valida `parseChatRequest` en `src/lib/chat.ts`. */
+export interface ChatRequestBody {
+  readonly mode: ChatMode;
+  readonly message: string;
+  /**
+   * Turnos anteriores, solo para quien no tiene conversación guardada. Con
+   * `conversation_id`, el servidor lee el historial de Supabase y lo ignora.
+   */
+  readonly history?: readonly ChatMessage[];
+  /** Conversación guardada que se continúa. Exige sesión. */
+  readonly conversation_id?: string;
+  readonly locale?: Locale;
+  /** Región de plataformas, ISO 3166-1 alfa-2 (`ES`, `MX`…). */
+  readonly region?: string;
+}
+
+/** Título que Umber ha recomendado, con lo que necesita la ficha de contenido. */
+export interface Recommendation {
+  /** `content.id`: lo que se guarda en `users_favorites`. */
+  readonly id: string;
+  readonly tmdb_id: number;
+  readonly type: ContentType;
+  readonly title: string;
+  readonly year: number | null;
+  readonly director: string | null;
+  readonly genres: readonly string[];
+  readonly poster_url: string | null;
+  /** Suscripción o gratis en la región. `null` si TMDB no respondió a tiempo. */
+  readonly platforms: readonly string[] | null;
+}
+
+export interface ApiErrorBody {
+  readonly error: {
+    readonly code: string;
+    /** Redactado para mostrarlo tal cual a la persona. */
+    readonly message: string;
+  };
+}
+
+/**
+ * Eventos del stream SSE de `POST /api/chat`, en este orden: `delta` tantas veces
+ * como fragmentos, y al final `done` o `error`. Un fallo antes de empezar no
+ * abre stream: llega como JSON `ApiErrorBody` con su código HTTP.
+ */
+export type ChatStreamEvent =
+  | { readonly event: 'delta'; readonly data: { readonly text: string } }
+  | {
+      readonly event: 'done';
+      readonly data: {
+        /** `null` sin sesión, o si guardar falló: la respuesta llegó igual. */
+        readonly conversation_id: string | null;
+        readonly recommendations: readonly Recommendation[];
+      };
+    }
+  | { readonly event: 'error'; readonly data: ApiErrorBody['error'] };
+
 // ─── Localización ────────────────────────────────────────────────────────────
 
 export const LOCALES = ['es', 'en'] as const;

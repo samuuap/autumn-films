@@ -132,6 +132,56 @@ export type Database = {
         }
         Relationships: []
       }
+      platforms_cache: {
+        Row: {
+          by_region: Json
+          content_id: string
+          fetched_at: string
+        }
+        Insert: {
+          by_region: Json
+          content_id: string
+          fetched_at?: string
+        }
+        Update: {
+          by_region?: Json
+          content_id?: string
+          fetched_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platforms_cache_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: true
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rate_limits: {
+        Row: {
+          expires_at: string
+          hits: number
+          key: string
+          window_seconds: number
+          window_start: string
+        }
+        Insert: {
+          expires_at: string
+          hits?: number
+          key: string
+          window_seconds: number
+          window_start: string
+        }
+        Update: {
+          expires_at?: string
+          hits?: number
+          key?: string
+          window_seconds?: number
+          window_start?: string
+        }
+        Relationships: []
+      }
       users_favorites: {
         Row: {
           content_id: string | null
@@ -166,6 +216,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      hit_rate_limit: {
+        Args: { p_key: string; p_limits: number[]; p_window_seconds: number[] }
+        Returns: number
+      }
       search_content: {
         Args: {
           content_type?: string

@@ -1,0 +1,65 @@
+---
+/**
+ * Favoritos del usuario. Las plataformas se piden a TMDB desde el servidor al
+ * pintar la página: el navegador nunca habla con TMDB.
+ */
+import ContentCard from '@/components/ContentCard.astro';
+import Layout from '@/layouts/Layout.astro';
+import { listFavorites } from '@/lib/favorites';
+import { regionFromAcceptLanguage } from '@/lib/locale';
+import { lookupPlatforms } from '@/lib/platforms';
+import { TMDB_DEFAULT_REGION, posterUrl } from '@/lib/tmdb';
+import type { Recommendation } from '@/lib/types';
+
+const { user, supabase } = Astro.locals;
+if (user === null) return Astro.redirect('/entrar?next=%2Ffavoritos');
+
+const favorites = await listFavorites(supabase);
+const region =
+  regionFromAcceptLanguage(Astro.request.headers.get('accept-language')) ?? TMDB_DEFAULT_REGION;
+const { platforms, saved } = await lookupPlatforms(favorites, region);
+// Esperarla aquí: en Vercel, lo que sigue en marcha tras responder puede no terminar.
+await saved;
+
+const items: Recommendation[] = favorites.map((favorite, index) => ({
+  id: favorite.id,
+  tmdb_id: favorite.tmdb_id,
+  type: favorite.type,
+  title: favorite.title,
+  year: favorite.year,
+  director: favorite.director,
+  genres: favorite.genres,
+  poster_url: posterUrl(favorite.poster_path),
+  platforms: platforms[index] ?? null,
+}));
+---
+
+<Layout title="Favoritos — Umber">
+  <main class="mx-auto w-full max-w-5xl flex-1 px-5 py-10">
+    <h1 class="text-3xl font-semibold">Tus favoritos</h1>
+    {
+      items.length === 0 ? (
+        <p class="text-umber-ash mt-4 max-w-md leading-relaxed">
+          Todavía no has guardado nada.{' '}
+          <a href="/" class="text-umber-cream underline underline-offset-4">
+            Pide una recomendación
+          </a>{' '}
+          y pulsa «Guardar» en su ficha.
+        </p>
+      ) : (
+        <>
+          <p class="text-umber-ash mt-2 text-sm">
+            Si quitas uno, sigue aquí hasta que recargues, por si fue sin querer.
+          </p>
+          <ul class="mt-6 grid gap-4 md:grid-cols-2">
+            {items.map((item) => (
+              <li>
+                <ContentCard item={item} favorite />
+              </li>
+            ))}
+          </ul>
+        </>
+      )
+    }
+  </main>
+</Layout>

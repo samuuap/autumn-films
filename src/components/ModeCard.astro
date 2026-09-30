@@ -1,0 +1,42 @@
+---
+/**
+ * Tarjeta de un modo en la portada. Los de v2 se ven pero no se pueden elegir:
+ * están diseñados y no se eliminan.
+ */
+import type { ChatModeDefinition } from '@/lib/types';
+
+interface Props {
+  definition: ChatModeDefinition;
+}
+
+const { definition } = Astro.props;
+const base = 'flex h-full flex-col gap-2 rounded-xl border p-5 transition-colors';
+---
+
+{
+  definition.available ? (
+    <a
+      href={`/chat?mode=${definition.id}`}
+      class:list={[
+        base,
+        'border-umber-sienna/60 bg-umber-surface/70 hover:border-umber-amber hover:bg-umber-surface group',
+      ]}
+    >
+      <span class="font-display text-2xl">{definition.label}</span>
+      <span class="text-umber-ash text-sm leading-relaxed">{definition.description}</span>
+      <span class="text-umber-amber mt-auto pt-3 text-sm font-medium">
+        Empezar <span aria-hidden="true" class="inline-block transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none">→</span>
+      </span>
+    </a>
+  ) : (
+    <div aria-disabled="true" class:list={[base, 'border-umber-surface text-umber-ash']}>
+      <span class="flex items-baseline justify-between gap-3">
+        <span class="font-display text-2xl">{definition.label}</span>
+        <span class="border-umber-surface rounded-full border px-2 py-0.5 text-[0.65rem] tracking-wide uppercase">
+          Próximamente
+        </span>
+      </span>
+      <span class="text-sm leading-relaxed">{definition.description}</span>
+    </div>
+  )
+}

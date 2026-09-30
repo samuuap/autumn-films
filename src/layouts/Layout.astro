@@ -1,16 +1,21 @@
 ---
 import { Font } from 'astro:assets';
 
+import SiteFooter from '@/components/SiteFooter.astro';
+import SiteHeader from '@/components/SiteHeader.astro';
 import '@/styles/global.css';
 
 interface Props {
   title?: string;
   description?: string;
+  /** El chat lo quita: su compositor ocupa el pie de la pantalla. */
+  footer?: boolean;
 }
 
 const {
   title = 'Umber — planificador cinematográfico otoñal',
   description = 'Cuéntale a Umber cómo te sientes y te encuentra la película o la serie que encaja con ese otoño.',
+  footer = true,
 } = Astro.props;
 ---
 
@@ -30,7 +35,17 @@ const {
     <Font cssVariable="--font-playfair" preload />
     <Font cssVariable="--font-inter" preload />
   </head>
-  <body>
-    <slot />
+  <body class="flex flex-col">
+    <a
+      href="#contenido"
+      class="bg-umber-amber text-umber-base sr-only z-50 rounded px-3 py-2 focus:not-sr-only focus:fixed focus:top-3 focus:left-3"
+    >
+      Saltar al contenido
+    </a>
+    <SiteHeader />
+    <div id="contenido" class="flex flex-1 flex-col">
+      <slot />
+    </div>
+    {footer && <SiteFooter />}
   </body>
 </html>

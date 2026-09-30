@@ -23,26 +23,51 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 ```
 /
 ├── src/
-│   ├── components/          # Componentes Astro y UI
+│   ├── components/          # SiteHeader, SiteFooter, ModeCard, ContentCard, ChatMessage, AuthForm
 │   ├── layouts/
-│   │   └── Layout.astro     # Layout base: tema, tipografías, metadatos
+│   │   └── Layout.astro     # Layout base: tema, tipografías, metadatos, cabecera y pie
+│   ├── middleware.ts        # Sesión de Supabase (cookies) en Astro.locals, en cada petición
+│   ├── env.d.ts             # Tipos de Astro.locals
 │   ├── pages/
 │   │   ├── index.astro      # Pantalla de inicio — selector de modo
-│   │   ├── chat.astro       # Página del chat
+│   │   ├── chat.astro       # Chat: ?mode=movie para empezar, ?conversation=<id> para retomar
+│   │   ├── entrar.astro     # Login (formulario sin JS)
+│   │   ├── registro.astro   # Registro; el proyecto exige confirmar el email
+│   │   ├── salir.ts         # POST: cierra la sesión de este navegador
+│   │   ├── favoritos.astro  # Favoritos, con plataformas pedidas a TMDB en servidor
+│   │   ├── conversaciones.astro  # Conversaciones guardadas
+│   │   ├── auth/
+│   │   │   └── confirm.ts   # Vuelta del enlace del email (code o token_hash)
 │   │   └── api/
-│   │       ├── chat.ts      # Endpoint principal — llama a DeepSeek
-│   │       ├── search.ts    # Búsqueda semántica en Supabase pgvector
-│   │       └── tmdb.ts      # Proxy para TMDB API
+│   │       ├── chat.ts      # Endpoint principal — orquesta búsqueda, DeepSeek y SSE
+│   │       ├── favorites.ts # POST / DELETE de favoritos
+│   │       ├── search.ts    # Búsqueda semántica en Supabase pgvector (pendiente)
+│   │       └── tmdb.ts      # Proxy para TMDB API (pendiente)
 │   ├── lib/
 │   │   ├── env.ts           # Único acceso a variables de entorno (servidor)
 │   │   ├── env.client.ts    # Variables públicas para el navegador
 │   │   ├── errors.ts        # Jerarquía de errores tipados
-│   │   ├── types.ts         # Tipos de dominio y los 4 modos
+│   │   ├── types.ts         # Tipos de dominio, los 4 modos y el contrato de /api/chat
 │   │   ├── database.types.ts  # Tipos de las tablas de Supabase
 │   │   ├── deepseek.ts      # Cliente DeepSeek (compatible con SDK OpenAI)
-│   │   ├── supabase.ts      # Clientes Supabase (anon / usuario / service)
+│   │   ├── supabase.ts      # Clientes Supabase (anon / cookies / usuario / service)
 │   │   ├── tmdb.ts          # Funciones TMDB
-│   │   └── embeddings.ts    # Generación de embeddings (Qwen3 autoalojado)
+│   │   ├── platforms.ts     # Plataformas de TMDB con caché en Supabase (platforms_cache)
+│   │   ├── rate-limit.ts    # Límite de mensajes de /api/chat por usuario o IP
+│   │   ├── embeddings.ts    # Generación de embeddings (Qwen3 autoalojado)
+│   │   ├── search.ts        # Búsqueda semántica: suelo de similitud y reordenado
+│   │   ├── chat.ts          # Validación del chat, contexto del modelo y fichas
+│   │   ├── prompts.ts       # Carga y rellena las plantillas de src/prompts/
+│   │   ├── auth.ts          # Usuario de la sesión o del token, redirecciones y errores
+│   │   ├── conversations.ts # Leer, listar y guardar conversaciones con RLS
+│   │   ├── favorites.ts     # Favoritos con RLS
+│   │   ├── api.ts           # JSON y errores comunes de los endpoints
+│   │   ├── locale.ts        # Idioma y región desde Accept-Language
+│   │   ├── markdown.ts      # Texto de Umber a HTML, escapado (servidor y navegador)
+│   │   └── chat-stream.ts   # Lector del SSE de /api/chat en el navegador
+│   ├── scripts/             # JavaScript del navegador (sin framework)
+│   │   ├── chat.ts          # El chat: envío, stream, errores, fichas
+│   │   └── content-card.ts  # Rellenar fichas y botón de favorito
 │   ├── prompts/
 │   │   ├── system.md        # System prompt de Umber (identidad, tono, reglas)
 │   │   └── user-context.md  # Plantilla del user prompt con {{variables}}
@@ -90,7 +115,7 @@ EMBEDDINGS_API_KEY=        # Solo si ese servicio está autenticado
 
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
-SUPABASE_SECRET_KEY=      # Solo scripts de seed y endpoints de servidor
+SUPABASE_SECRET_KEY=      # Scripts de seed y servidor. /api/chat no funciona sin ella (rate limiting)
 
 TMDB_API_KEY=
 TMDB_READ_ACCESS_TOKEN=
@@ -246,8 +271,47 @@ no se ve en la firma:
   como mucho 40 filas (`ef_search`) y el filtro por tipo se aplica después: con
   solo 500 series, las búsquedas de `tv` se quedaban en 2 o 3 candidatos. No
   quitarlo, y si se recrea la función, volver a ponerlo
-- El `min_score` por defecto (0.5) es alto para este modelo: resultados buenos
-  caen entre 0,45 y 0,6
+- El `min_score` por defecto (0.5) es alto para este modelo: en películas, lo
+  bueno cae entre 0,40 y 0,55, y en series, que son 500, puede quedarse en 0,32
+- **No pasarle un `min_score` que pocas filas superen.** La búsqueda iterativa
+  sigue recorriendo el índice hasta completar el `LIMIT`: con 0.99, hasta 4,3 s y
+  un timeout del rol `anon`. El chat pide con `min_score = -1` y aplica su suelo
+  (0,30) en `src/lib/search.ts`; como las filas llegan ordenadas, da lo mismo
+
+### `platforms_cache` y `rate_limits` — solo servidor
+
+```sql
+CREATE TABLE platforms_cache (
+  content_id  UUID PRIMARY KEY REFERENCES content(id) ON DELETE CASCADE,
+  by_region   JSONB NOT NULL,        -- {"ES": ["Netflix", "Filmin"], …}
+  fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE rate_limits (
+  key            TEXT NOT NULL,      -- 'user:<uuid>' o 'ip:<dirección>' (IPv6: su /64)
+  window_seconds INTEGER NOT NULL,
+  window_start   TIMESTAMPTZ NOT NULL,
+  expires_at     TIMESTAMPTZ NOT NULL,
+  hits           INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, window_seconds, window_start)
+);
+
+-- 0 si la petición cabe; si no, segundos hasta poder repetir
+hit_rate_limit(p_key TEXT, p_window_seconds INT[], p_limits INT[]) RETURNS INTEGER
+```
+
+- Las dos tablas tienen RLS **sin políticas** y sin permisos para `anon` ni
+  `authenticated`; `hit_rate_limit` solo la ejecuta `service_role`. Se usan con
+  `getSupabaseAdminClient()`: no son datos de ningún usuario, y abrir la función
+  a la publishable key dejaría gastar el cupo de otra IP
+- `by_region` lleva **todas las regiones**, ya normalizadas por
+  `getStreamingNames()`: TMDB las manda juntas. Una región que no aparece no
+  tiene plataformas de suscripción ni gratis. La caducidad (3 días) la aplica
+  `src/lib/platforms.ts`; una fila caducada no se borra, porque sirve de
+  respaldo si TMDB no responde
+- `hit_rate_limit` cuenta en ventanas fijas alineadas con la época (el día es de
+  UTC) y borra lo caducado en cada llamada. Los límites viven en
+  `src/lib/rate-limit.ts`
 
 ---
 
@@ -256,23 +320,70 @@ no se ve en la firma:
 ```
 Usuario escribe
       ↓
-POST /api/chat
+POST /api/chat → validar (parseChatRequest)
       ↓
-Embedding del mensaje (Qwen3-Embedding, servicio propio)
+A la vez:
+  - Rate limit (hit_rate_limit): 8/min; 300/día con sesión, 60/día por IP sin ella → 429
+  - Historial: de Supabase si hay conversation_id, si no el que manda el cliente
       ↓
-Búsqueda semántica en pgvector → candidatos
+Embedding de los 3 últimos mensajes del usuario (Qwen3-Embedding, servicio propio)
       ↓
-Enriquecer con datos TMDB (streaming, póster)
+Búsqueda semántica en pgvector → 30 candidatos, sin los ya recomendados
       ↓
-Llamada a DeepSeek (`deepseek-flash`):
+Reordenar por similitud + 0,1 × autumn_score → 10
+      ↓
+Enriquecer con datos TMDB (plataformas: platforms_cache, 3 días; si no, TMDB
+con 2 s de tope; prescindible)
+      ↓
+Llamada a DeepSeek (`deepseek-flash`), mientras se escribe la caché:
   - system.md (Umber)
-  - user-context.md relleno con candidatos + modo + historial
-  - Historial de mensajes de la conversación
+  - Los últimos 12 mensajes de la conversación
+  - user-context.md relleno con candidatos + modo + ya recomendados
       ↓
-Stream de respuesta al cliente
+Stream SSE al cliente
       ↓
-Guardar en Supabase (si autenticado)
+Guardar en Supabase (si autenticado) → evento `done`
 ```
+
+Contrato de `POST /api/chat`, tipado en `src/lib/types.ts`:
+
+- **Cuerpo** (`ChatRequestBody`): `mode`, `message` (≤ 1.000 caracteres) y,
+  opcionales, `history` (≤ 40 mensajes `user`/`assistant`, solo sin
+  conversación guardada), `conversation_id`, `locale` y `region`
+- **Sesión**: la de las cookies (el navegador) o `Authorization: Bearer
+  <access_token>` (scripts). Sin ninguna se chatea sin guardar; con un token
+  inválido o caducado, 401
+- **Respuesta** (`ChatStreamEvent`): `text/event-stream` con `delta { text }`
+  por fragmento y, al final, `done { conversation_id, recommendations }` o
+  `error { code, message }`. `recommendations` trae la ficha de cada título que
+  Umber ha nombrado: id del corpus, póster y plataformas
+- **Errores antes del primer token**: JSON `{ error: { code, message } }` con el
+  `status` del error tipado (400, 401, 404, 429, 502). `message` se puede mostrar
+  tal cual. El 429 (`rate_limited`) lleva `Retry-After` en segundos
+
+---
+
+## Auth
+
+- Sesión por **SSR en cookies** con `@supabase/ssr`. No hay cliente de Supabase
+  en el navegador, así que las cookies van `httpOnly` y las claves siguen sin
+  prefijo `PUBLIC_`
+- `src/middleware.ts` crea en cada petición el cliente con las cookies y verifica
+  la sesión con `getClaims()`: en local, con las claves ES256 del proyecto, sin
+  llamada de red. Deja `Astro.locals.supabase` y `Astro.locals.user`
+- Leer y escribir datos del usuario siempre con `Astro.locals.supabase` (o
+  `getRequestUser()` en endpoints), nunca con la secret key: RLS hace el resto.
+  Las únicas tablas que la app toca con la secret key son `platforms_cache` y
+  `rate_limits`, que no son de ningún usuario
+- El proyecto **exige confirmar el email**. El enlace vuelve a `/auth/confirm`,
+  que tiene que estar en *Redirect URLs* del dashboard (Authentication → URL
+  Configuration), junto con la *Site URL*. Con la plantilla de email por
+  defecto (`?code=`) el enlace solo funciona en el navegador del registro; la
+  plantilla con `?token_hash=` funciona en cualquiera
+- Registrar emails inventados hace rebotar el SMTP por defecto de Supabase, que
+  limita los envíos. Para probar, crear usuarios ya confirmados con la Admin API
+  (como hace `scripts/verify-rls.mjs`) y, si hace falta un enlace, sacarlo de
+  `/auth/v1/admin/generate_link`, que no envía correo
 
 ---
 
@@ -301,6 +412,14 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
   así que esas correcciones viven en `src/lib/types.ts`
 - Imports con alias `@/` para `src/`
 - Streaming activado siempre en las llamadas al chat de DeepSeek
+- JavaScript del navegador en `src/scripts/`, sin framework. Solo puede importar
+  de `src/lib/` los módulos que no tocan servidor: `types.ts`, `markdown.ts`,
+  `chat-stream.ts`
+- Astro pinta el `<script>` de un componente donde se pinta el componente. Si el
+  componente va dentro de un `<template>` (como `ContentCard` en el chat), su
+  script queda inerte: quien clona la plantilla tiene que inicializarlo
+- Texto que viene del LLM o del usuario: `textContent`, o `renderReply()`, que
+  escapa antes de dar formato. Nunca `innerHTML` con texto sin escapar
 
 ---
 
@@ -355,7 +474,8 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
 - Región por defecto para streaming: `ES`. Detectar por idioma del usuario si es posible
 - Pósters: `https://image.tmdb.org/t/p/w500{poster_path}`
 - Backdrops hero: `https://image.tmdb.org/t/p/original{backdrop_path}`
-- Cachear respuestas de TMDB en Supabase para no repetir llamadas
+- Las plataformas se piden siempre con `lookupPlatforms()` (`src/lib/platforms.ts`),
+  que las cachea en `platforms_cache`, y no con las funciones de `src/lib/tmdb.ts`
 
 ---
 

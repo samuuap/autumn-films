@@ -4,10 +4,11 @@
 
     {{mode}}                 id del modo: movie | tv | weekend | month
     {{mode_label}}           etiqueta legible del modo
-    {{locale}}               idioma de la respuesta: es | en
+    {{locale}}               idioma de la interfaz: es | en. La respuesta va en el
+                             del mensaje; este solo decide si el mensaje no lo deja claro
     {{region}}               región para plataformas de streaming (p. ej. ES)
     {{today}}                fecha actual en ISO, para el contexto estacional
-    {{user_message}}         último mensaje del usuario, ya validado
+    {{user_message}}         último mensaje del usuario, ya validado y citado con «> »
     {{candidates}}           bloque de candidatos del corpus (ver formato abajo)
     {{already_recommended}}  títulos ya recomendados en esta conversación
 
@@ -23,7 +24,7 @@
 ## Contexto de la petición
 
 - Modo: {{mode_label}} (`{{mode}}`)
-- Idioma de respuesta: {{locale}}
+- Idioma de la interfaz: {{locale}} (responde en el idioma en que escribe la persona)
 - Región de streaming: {{region}}
 - Fecha: {{today}}
 
@@ -34,8 +35,8 @@
 ## Candidatos del corpus
 
 Estos son los únicos títulos que puedes recomendar. Vienen ordenados por
-similitud semántica con el mensaje, pero el orden no es una recomendación: elige
-el que de verdad encaje con el ánimo, no el primero.
+parecido con el mensaje y por cuán otoñales son, pero el orden no es una
+recomendación: elige el que de verdad encaje con el ánimo, no el primero.
 
 {{candidates}}
 
@@ -47,4 +48,8 @@ el que de verdad encaje con el ánimo, no el primero.
 
 Elige **un** título de la lista y explica en dos o tres párrafos cortos por qué
 es el adecuado para esta persona ahora mismo. Si ninguno encaja, dilo y pide otro
-ángulo. No salgas de la lista.
+ángulo. No salgas de la lista, y no la nombres: habla de las películas como algo
+que conoces.
+
+Escribe en el idioma del mensaje de la persona, aunque este contexto esté en
+español.

@@ -1,0 +1,119 @@
+---
+/**
+ * Ficha de un título: cartel, datos, plataformas y botón de favorito.
+ *
+ * Con `item` se pinta en el servidor. Sin él sale vacía, para usarla dentro de
+ * un `<template>` que el chat clona y rellena con `fillContentCard`: el marcado
+ * vive en un solo sitio.
+ *
+ * Dentro de un `<template>`, el `<script>` de abajo sale inerte (Astro lo pinta
+ * junto al componente): quien use la plantilla llama él a `initFavoriteButtons()`.
+ */
+import { describeCard } from '@/scripts/content-card';
+import type { Recommendation } from '@/lib/types';
+
+interface Props {
+  item?: Recommendation;
+  favorite?: boolean;
+}
+
+const { item, favorite = false } = Astro.props;
+const description = item === undefined ? null : describeCard(item);
+const posterUrl = item?.poster_url ?? null;
+const platforms = item?.platforms ?? null;
+const signedIn = Astro.locals.user !== null;
+const loginHref = `/entrar?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
+---
+
+<article
+  data-content-card
+  data-content-id={item?.id}
+  class="border-umber-surface bg-umber-surface/50 flex gap-4 rounded-xl border p-3 sm:p-4"
+>
+  <div class="bg-umber-base relative aspect-[2/3] w-24 shrink-0 overflow-hidden rounded-md sm:w-28">
+    <img
+      data-field="poster"
+      src={posterUrl ?? undefined}
+      alt={description?.posterAlt ?? ''}
+      width="500"
+      height="750"
+      loading="lazy"
+      decoding="async"
+      hidden={posterUrl === null}
+      class="h-full w-full object-cover"
+    />
+    <div
+      data-field="no-poster"
+      hidden={posterUrl !== null}
+      class="text-umber-ash flex h-full items-center justify-center p-2 text-center text-xs"
+    >
+      Sin cartel
+    </div>
+  </div>
+
+  <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+    <p data-field="kind" class="text-umber-amber text-[0.7rem] font-medium tracking-[0.2em] uppercase">
+      {description?.kind}
+    </p>
+    <h3 class="font-display text-lg leading-snug">
+      <span data-field="title">{description?.title}</span>{' '}
+      <span data-field="year" hidden={description?.year == null} class="text-umber-ash font-sans text-sm">
+        {description?.year}
+      </span>
+    </h3>
+    <p data-field="credit" hidden={description?.credit == null} class="text-umber-ash text-sm">
+      {description?.credit}
+    </p>
+    <p data-field="genres" hidden={description?.genres == null} class="text-umber-ash text-xs">
+      {description?.genres}
+    </p>
+
+    <div data-field="platforms-block" hidden={platforms === null} class="mt-1">
+      <p class="text-umber-ash text-[0.7rem] tracking-[0.15em] uppercase">Dónde verla</p>
+      <ul
+        data-field="platforms"
+        hidden={platforms !== null && platforms.length === 0}
+        class="[&>li]:border-umber-sienna/70 mt-1.5 flex flex-wrap gap-1.5 [&>li]:rounded-full [&>li]:border [&>li]:px-2 [&>li]:py-0.5 [&>li]:text-xs"
+      >
+        {/* El estilo va en el padre: así vale también para los `<li>` que crea el chat. */}
+        {platforms?.map((name) => <li>{name}</li>)}
+      </ul>
+      <p data-field="no-platforms" hidden={platforms?.length !== 0} class="text-umber-ash mt-1 text-xs">
+        No está en plataformas de suscripción ahora mismo.
+      </p>
+    </div>
+
+    <div class="mt-auto pt-2">
+      {
+        signedIn ? (
+          <button
+            type="button"
+            data-favorite-button
+            data-content-id={item?.id}
+            aria-pressed={favorite ? 'true' : 'false'}
+            class="group border-umber-amber/50 text-umber-amber hover:bg-umber-amber/10 aria-pressed:bg-umber-amber aria-pressed:text-umber-base rounded-full border px-3 py-1 text-sm font-medium transition-colors"
+          >
+            <span class="group-aria-pressed:hidden">Guardar</span>
+            <span class="hidden group-aria-pressed:inline">Guardada</span>
+          </button>
+        ) : (
+          <a
+            href={loginHref}
+            target="_blank"
+            rel="noopener"
+            class="text-umber-ash hover:text-umber-cream text-sm underline underline-offset-4"
+          >
+            Entra para guardarla<span class="sr-only"> (se abre en otra pestaña)</span>
+          </a>
+        )
+      }
+      <p data-field="favorite-status" role="status" hidden class="text-umber-amber mt-1 text-xs"></p>
+    </div>
+  </div>
+</article>
+
+<script>
+  import { initFavoriteButtons } from '@/scripts/content-card';
+
+  initFavoriteButtons();
+</script>

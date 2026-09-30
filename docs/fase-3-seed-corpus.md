@@ -119,14 +119,10 @@ preciso. La salida natural es puntuar cada título dos o tres veces en lotes de
 composición distinta y promediar: céntimos y unos 2 minutos por pasada. Merece
 la pena antes de que el reordenado de la Fase 4 dependa de este número.
 
-**2. La instrucción de la consulta arrastra hacia títulos con «otoño».**
-Con *«está lloviendo y estoy melancólico»*, cuatro de los diez primeros llevan
-el otoño o las estaciones en el título (*Cuando cae el otoño*, *Sonata de
-otoño*…), aunque la consulta no lo menciona. La instrucción de `EMBEDDING_TASK`
-dice «retrieve the autumnal film»: como todo el corpus ya es otoñal, esa palabra
-no filtra nada y en cambio sesga hacia coincidencias literales. Probar en la
-Fase 4 una instrucción centrada en el estado de ánimo. Afecta solo a las
-consultas: no obliga a reindexar.
+**2. ~~La instrucción de la consulta arrastra hacia títulos con «otoño».~~**
+Resuelta en la Fase 4: la instrucción ya no dice «autumnal». De 14 títulos
+estacionales en 120 resultados se pasa a 0. Medidas y motivo en las
+[decisiones de la Fase 4](fase-4-api-chat.md#decisiones-tomadas).
 
 **3. `runtime` de las series es poco fiable.**
 TMDB ha dejado de rellenar `episode_run_time` en muchas series, y entonces se

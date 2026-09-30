@@ -2,7 +2,8 @@
  * Cliente de TMDB (API v3 con autenticación bearer v4).
  *
  * Solo se usa desde el servidor: el navegador llama a `/api/tmdb`, nunca a TMDB
- * directamente. El cacheo de respuestas en Supabase llega en la Fase 4.
+ * directamente. Las plataformas no se piden desde aquí sino con
+ * `lookupPlatforms()` de `src/lib/platforms.ts`, que las cachea en Supabase.
  */
 import { env } from '@/lib/env';
 import { TmdbError, toError } from '@/lib/errors';
@@ -206,8 +207,10 @@ export function getStreamingNames(
   region: string = TMDB_DEFAULT_REGION,
 ): string[] {
   const providers = getWatchProviders(details, region);
-  if (providers === null) return [];
+  return providers === null ? [] : streamingNames(providers);
+}
 
+function streamingNames(providers: TmdbWatchProviderRegion): string[] {
   const relevant = [...(providers.flatrate ?? []), ...(providers.free ?? [])];
 
   // Nombre limpio → mejor prioridad de sus duplicados.
@@ -230,4 +233,58 @@ export function getStreamingNames(
   return names.filter(
     (name) => !names.some((other) => other !== name && name.startsWith(`${other} `)),
   );
+}
+
+/**
+ * Región (ISO 3166-1, «ES») → lo que devuelve `getStreamingNames`. Las regiones
+ * sin ninguna plataforma de suscripción ni gratis no aparecen, igual que en TMDB.
+ */
+export type PlatformsByRegion = Record<string, string[]>;
+
+/** Las de todas las regiones: TMDB las manda juntas en la misma respuesta. */
+export function getStreamingNamesByRegion(details: TmdbDetails): PlatformsByRegion {
+  const byRegion: PlatformsByRegion = {};
+  for (const [region, providers] of Object.entries(details['watch/providers']?.results ?? {})) {
+    if (providers === undefined) continue;
+    const names = streamingNames(providers);
+    if (names.length > 0) byRegion[region] = names;
+  }
+  return byRegion;
+}
+
+/** TMDB enriquece, no es imprescindible: si tarda más, se sigue sin plataformas. */
+export const TMDB_PLATFORMS_TIMEOUT_MS = 2000;
+
+export interface PlatformLookup {
+  readonly type: ContentType;
+  readonly tmdb_id: number;
+}
+
+/**
+ * Plataformas de varios títulos a la vez, en paralelo y con un tope de tiempo
+ * común. Devuelve `null` en los que TMDB no respondió, para que quien lo use
+ * distinga «no está en ninguna plataforma» de «no lo sabemos».
+ */
+export async function fetchPlatformsByRegion(
+  items: readonly PlatformLookup[],
+  signal?: AbortSignal,
+): Promise<(PlatformsByRegion | null)[]> {
+  const timeout = AbortSignal.timeout(TMDB_PLATFORMS_TIMEOUT_MS);
+  const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+
+  const results = await Promise.allSettled(
+    items.map(async (item) =>
+      getStreamingNamesByRegion(await getDetails(item.type, item.tmdb_id, { signal: combined })),
+    ),
+  );
+
+  const failed = results.filter((result) => result.status === 'rejected');
+  if (failed.length > 0 && signal?.aborted !== true) {
+    console.warn(
+      `[tmdb] Sin plataformas para ${String(failed.length)} de ${String(results.length)} títulos:`,
+      failed[0]?.reason,
+    );
+  }
+
+  return results.map((result) => (result.status === 'fulfilled' ? result.value : null));
 }

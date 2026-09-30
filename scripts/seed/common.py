@@ -34,8 +34,8 @@ EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 EMBEDDING_DIMENSIONS = 1024
 EMBEDDING_MAX_CHARS = 8000
 EMBEDDING_TASK = (
-    "Given a description of how a viewer feels, retrieve the autumnal film or series "
-    "that best matches that mood"
+    "Given a description of how a viewer feels or what they feel like watching, "
+    "retrieve a film or series whose tone and story match that mood"
 )
 
 load_dotenv(ROOT / ".env.local")

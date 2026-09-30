@@ -1,0 +1,54 @@
+---
+/** Cabecera común: marca y navegación, según haya sesión o no. */
+const user = Astro.locals.user;
+const current = Astro.url.pathname;
+const next = encodeURIComponent(Astro.url.pathname + Astro.url.search);
+
+const links = user === null
+  ? []
+  : [
+      { href: '/conversaciones', label: 'Conversaciones' },
+      { href: '/favoritos', label: 'Favoritos' },
+    ];
+
+const linkClass =
+  'text-umber-ash hover:text-umber-cream aria-[current=page]:text-umber-cream rounded px-2.5 py-1.5 transition-colors';
+---
+
+<header class="border-umber-surface border-b">
+  <div class="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-4">
+    <a href="/" class="font-display text-2xl font-semibold tracking-tight">Umber</a>
+    <nav aria-label="Principal">
+      <ul class="flex items-center gap-1 text-sm">
+        {
+          links.map((link) => (
+            <li>
+              <a href={link.href} class={linkClass} aria-current={current === link.href ? 'page' : undefined}>
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+        <li>
+          {
+            user === null ? (
+              <a
+                href={`/entrar?next=${next}`}
+                class={linkClass}
+                aria-current={current === '/entrar' ? 'page' : undefined}
+              >
+                Entrar
+              </a>
+            ) : (
+              <form method="post" action="/salir">
+                <button type="submit" class={linkClass}>
+                  Salir
+                </button>
+              </form>
+            )
+          }
+        </li>
+      </ul>
+    </nav>
+  </div>
+</header>

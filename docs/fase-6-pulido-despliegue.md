@@ -1,8 +1,8 @@
 # Fase 6 — Pulido y despliegue
 
 **Estado:** ⏳ Pendiente
-**Depende de:** [Fase 5](fase-5-frontend.md) ⏳
-**Actualizado:** 2026-09-29
+**Depende de:** [Fase 5](fase-5-frontend.md) 🔄
+**Actualizado:** 2026-09-30
 
 ## Objetivo
 
@@ -25,9 +25,12 @@ coste bajo control.
 - [ ] Contraste de la paleta contra WCAG AA. El punto a vigilar es el texto
       secundario `#8A7B6E` sobre el fondo `#0D0B08`: en tamaños pequeños puede
       quedarse corto
-- [ ] Navegación completa por teclado y `aria-live` en el stream del chat, para
-      que un lector de pantalla anuncie la respuesta de Umber
-- [ ] Textos alternativos en pósters y backdrops
+- [ ] Navegación completa por teclado y lector de pantalla. Ya hay enlace
+      «Saltar al contenido», y la lista del chat lleva `aria-live="polite"` con
+      `aria-busy` mientras llega el stream (Fase 5); falta probarlo con VoiceOver o
+      NVDA, que anuncian los fragmentos de forma distinta
+- [x] Textos alternativos: los carteles llevan «Cartel de <título>». El backdrop
+      de la portada es decorativo (`alt=""`) y su título va escrito al pie
 
 ### i18n
 
@@ -51,14 +54,24 @@ coste bajo control.
 
 ### Operación
 
-- [ ] Rate limiting en `/api/chat` si no se hizo en la
-      [Fase 4](fase-4-api-chat.md)
+- [x] Rate limiting en `/api/chat`: hecho en la [Fase 4](fase-4-api-chat.md),
+      por usuario o por IP (`src/lib/rate-limit.ts`)
+- [x] `SUPABASE_SECRET_KEY` en las variables de Vercel, que el rate limiting del
+      chat necesita
+- [ ] **Región de las funciones de Vercel junto a Supabase** (`eu-west-1`,
+      Irlanda: `dub1`). Por defecto Vercel las pone en `iad1` (Washington). Cada
+      mensaje del chat hace al menos tres viajes a Supabase antes del primer token
+      (rate limit, búsqueda, caché de plataformas), y desde local ya cuestan unos
+      120 ms cada uno. En `iad1` los tres cruzarían el Atlántico, con el primer
+      byte ya en el límite de los 2 s (ver la tabla de la Fase 4)
 - [ ] Alguna forma de ver los errores en producción, aunque sea los logs de
       Vercel
 - [ ] Vigilar el gasto de DeepSeek. `deepseek-flash` es barato, pero el coste va
-      por conversación y no tiene techo. El endpoint `/user/balance` de DeepSeek
-      sirve para consultarlo por API. A 2026-09-29 la cuenta tiene 1,16 USD:
-      suficiente para desarrollo, no para abrir al público
+      por conversación. El rate limiting pone techo por persona, no en total:
+      muchas IPs a la vez siguen sin tope. Si hace falta, un límite global diario
+      es otra regla de `hit_rate_limit` con una clave fija. El endpoint
+      `/user/balance` de DeepSeek sirve para consultarlo por API. A 2026-09-29 la
+      cuenta tiene 1,16 USD: suficiente para desarrollo, no para abrir al público
 
 ## Decisiones tomadas
 

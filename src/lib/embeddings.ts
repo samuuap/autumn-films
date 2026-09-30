@@ -34,9 +34,14 @@ export const EMBEDDING_MAX_CHARS = 8000;
  * documento va en crudo. Omitirla cuesta entre un 1% y un 5% de precisión de
  * recuperación según el propio modelo. La instrucción va en inglés aunque el
  * corpus esté en español: es como está entrenado el modelo.
+ *
+ * No dice «autumnal» a propósito: todo el corpus ya es otoñal, así que la
+ * palabra no filtraba nada y arrastraba hacia títulos con «otoño» en el nombre
+ * (14 de 120 resultados en 12 consultas de control; con esta, 0). También separa
+ * mejor los mensajes ajenos al cine. Medidas en `docs/fase-4-api-chat.md`.
  */
 export const EMBEDDING_TASK =
-  'Given a description of how a viewer feels, retrieve the autumnal film or series that best matches that mood';
+  'Given a description of how a viewer feels or what they feel like watching, retrieve a film or series whose tone and story match that mood';
 
 let client: OpenAI | undefined;
 
@@ -45,6 +50,11 @@ function getEmbeddingsClient(): OpenAI {
     baseURL: env.embeddings.url,
     // En local no hay autenticación, pero el SDK exige un valor no vacío.
     apiKey: env.embeddings.apiKey ?? 'local',
+    // Vectorizar una consulta tarda milisegundos. El SDK espera por defecto 10
+    // minutos y reintenta dos veces: con el servicio colgado, el chat se quedaría
+    // mudo en vez de decir que el buscador no responde.
+    timeout: 10_000,
+    maxRetries: 1,
   });
   return client;
 }

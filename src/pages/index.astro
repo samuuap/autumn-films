@@ -1,51 +1,98 @@
 ---
-// Página de espera. El selector de los 4 modos se construye en la Fase 5;
-// esto solo verifica que el andamiaje (tema, tipografías, Tailwind) funciona.
+/**
+ * Portada: qué es Umber y el selector de modos. El fondo es el backdrop de un
+ * título muy otoñal del corpus, distinto en cada visita.
+ */
+import ModeCard from '@/components/ModeCard.astro';
 import Layout from '@/layouts/Layout.astro';
+import { errorMessage } from '@/lib/errors';
+import { getSupabaseClient, unwrap } from '@/lib/supabase';
+import { backdropUrl } from '@/lib/tmdb';
 import { CHAT_MODES, CHAT_MODE_DEFINITIONS } from '@/lib/types';
+
+/** Solo los más otoñales: el fondo es lo primero que se ve. */
+const HERO_MIN_AUTUMN_SCORE = 0.85;
+const HERO_POOL = 80;
+
+interface Hero {
+  readonly title: string;
+  readonly year: number | null;
+  readonly path: string;
+}
+
+let hero: Hero | null = null;
+try {
+  const rows = unwrap(
+    await getSupabaseClient()
+      .from('content')
+      .select('title, year, backdrop_path')
+      .gte('autumn_score', HERO_MIN_AUTUMN_SCORE)
+      .not('backdrop_path', 'is', null)
+      .limit(HERO_POOL),
+  );
+  const pick = rows[Math.floor(Math.random() * rows.length)];
+  if (pick?.backdrop_path != null) {
+    hero = { title: pick.title, year: pick.year, path: pick.backdrop_path };
+  }
+} catch (error: unknown) {
+  // La portada funciona sin fondo: no merece un error.
+  console.warn('[portada] Sin imagen de fondo:', errorMessage(error));
+}
 ---
 
 <Layout>
-  <main class="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-10 px-6 py-20">
-    <header class="space-y-4">
-      <p class="text-umber-amber text-xs font-medium tracking-[0.25em] uppercase">Proyecto</p>
-      <h1 class="font-display text-6xl leading-none font-semibold">Umber</h1>
-      <p class="text-umber-ash max-w-md text-lg leading-relaxed">
-        Un cinéfilo que escucha cómo te sientes y te devuelve la película exacta para este otoño.
-      </p>
-    </header>
+  <main>
+    <section class="relative isolate overflow-hidden">
+      {
+        hero !== null && (
+          <img
+            src={backdropUrl(hero.path, 'w1280')}
+            srcset={`${backdropUrl(hero.path, 'w780')} 780w, ${backdropUrl(hero.path, 'w1280')} 1280w, ${backdropUrl(hero.path)} 3840w`}
+            sizes="100vw"
+            alt=""
+            fetchpriority="high"
+            class="absolute inset-0 -z-10 h-full w-full object-cover opacity-45"
+          />
+        )
+      }
+      <div
+        class="from-umber-base via-umber-base/75 to-umber-base/20 absolute inset-0 -z-10 bg-gradient-to-t"
+        aria-hidden="true"
+      >
+      </div>
 
-    <section aria-labelledby="modos" class="space-y-4">
-      <h2 id="modos" class="text-umber-ash text-xs font-medium tracking-[0.2em] uppercase">
-        Modos
-      </h2>
-      <ul class="divide-umber-surface divide-y">
+      <div class="mx-auto max-w-5xl space-y-6 px-5 pt-20 pb-16 sm:pt-32 sm:pb-24">
+        <p class="text-umber-amber text-xs font-medium tracking-[0.25em] uppercase">Cine para este otoño</p>
+        <h1 class="font-display max-w-3xl text-5xl leading-[1.05] font-semibold sm:text-7xl">
+          Cuéntale a Umber cómo te sientes.
+        </h1>
+        <p class="text-umber-cream/85 max-w-xl text-lg leading-relaxed">
+          Te devuelve una película o una serie que encaje con ese ánimo, te explica por qué y te dice
+          dónde verla.
+        </p>
+      </div>
+
+      {
+        hero !== null && (
+          <p class="text-umber-ash absolute right-5 bottom-3 text-xs">
+            En la imagen: {hero.title}
+            {hero.year !== null && ` (${String(hero.year)})`}
+          </p>
+        )
+      }
+    </section>
+
+    <section aria-labelledby="modos" class="mx-auto max-w-5xl space-y-5 px-5 py-12">
+      <h2 id="modos" class="text-2xl">¿Qué te apetece?</h2>
+      <ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {
-          CHAT_MODES.map((mode) => {
-            const definition = CHAT_MODE_DEFINITIONS[mode];
-            return (
-              <li class="flex items-baseline justify-between gap-6 py-3">
-                <div>
-                  <span class="font-display text-xl">{definition.label}</span>
-                  <p class="text-umber-ash text-sm">{definition.description}</p>
-                </div>
-                <span
-                  class:list={[
-                    'shrink-0 rounded-full border px-2.5 py-0.5 text-[0.7rem] tracking-wide uppercase',
-                    definition.available
-                      ? 'border-umber-amber/40 text-umber-amber'
-                      : 'border-umber-surface text-umber-ash',
-                  ]}
-                >
-                  {definition.available ? 'MVP' : 'v2'}
-                </span>
-              </li>
-            );
-          })
+          CHAT_MODES.map((mode) => (
+            <li>
+              <ModeCard definition={CHAT_MODE_DEFINITIONS[mode]} />
+            </li>
+          ))
         }
       </ul>
     </section>
-
-    <footer class="text-umber-ash text-xs">Fase 1 — andamiaje y configuración base.</footer>
   </main>
 </Layout>

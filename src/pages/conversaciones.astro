@@ -1,0 +1,68 @@
+---
+/** Conversaciones guardadas del usuario, para retomarlas. */
+import Layout from '@/layouts/Layout.astro';
+import { CONVERSATION_LIST_LIMIT, listConversations } from '@/lib/conversations';
+import { CHAT_MODE_DEFINITIONS } from '@/lib/types';
+
+const { user, supabase } = Astro.locals;
+if (user === null) return Astro.redirect('/entrar?next=%2Fconversaciones');
+
+const conversations = await listConversations(supabase);
+
+// La región por defecto de la app es España; hasta la i18n de la Fase 6, la hora va en la suya.
+const dateFormat = new Intl.DateTimeFormat('es-ES', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'Europe/Madrid',
+});
+
+const PREVIEW_CHARS = 140;
+function preview(text: string | null): string {
+  if (text === null) return 'Conversación sin mensajes';
+  const flat = text.replace(/\s+/gu, ' ').trim();
+  return flat.length > PREVIEW_CHARS ? `${flat.slice(0, PREVIEW_CHARS)}…` : flat;
+}
+---
+
+<Layout title="Conversaciones — Umber">
+  <main class="mx-auto w-full max-w-3xl flex-1 px-5 py-10">
+    <h1 class="text-3xl font-semibold">Tus conversaciones</h1>
+    {
+      conversations.length === 0 ? (
+        <p class="text-umber-ash mt-4 leading-relaxed">
+          Aún no tienes conversaciones guardadas.{' '}
+          <a href="/" class="text-umber-cream underline underline-offset-4">
+            Empieza una
+          </a>
+          .
+        </p>
+      ) : (
+        <>
+          <ul class="divide-umber-surface mt-6 divide-y">
+            {conversations.map((conversation) => (
+              <li>
+                <a
+                  href={`/chat?conversation=${conversation.id}`}
+                  class="hover:bg-umber-surface/60 -mx-3 block rounded-lg px-3 py-4 transition-colors"
+                >
+                  <span class="block leading-relaxed">«{preview(conversation.firstMessage)}»</span>
+                  <span class="text-umber-ash mt-1 block text-xs">
+                    {CHAT_MODE_DEFINITIONS[conversation.mode].label} ·{' '}
+                    <time datetime={conversation.updatedAt}>
+                      {dateFormat.format(new Date(conversation.updatedAt))}
+                    </time>
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+          {conversations.length === CONVERSATION_LIST_LIMIT && (
+            <p class="text-umber-ash mt-4 text-xs">
+              Se muestran las {CONVERSATION_LIST_LIMIT} más recientes.
+            </p>
+          )}
+        </>
+      )
+    }
+  </main>
+</Layout>

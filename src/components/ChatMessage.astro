@@ -1,0 +1,56 @@
+---
+/**
+ * Un mensaje del chat. Con `text` se pinta en el servidor (conversación
+ * guardada); sin él sale vacío, como plantilla para el `<script>` del chat.
+ */
+import { renderReply } from '@/lib/markdown';
+
+interface Props {
+  role: 'user' | 'assistant';
+  text?: string;
+}
+
+const { role, text = '' } = Astro.props;
+---
+
+{
+  role === 'user' ? (
+    <li data-role="user" class="flex justify-end">
+      <p class="sr-only">Tú:</p>
+      <div
+        data-field="body"
+        class="bg-umber-sienna/35 max-w-[85%] rounded-2xl rounded-br-sm px-4 py-2.5 whitespace-pre-line"
+      >
+        {text}
+      </div>
+    </li>
+  ) : (
+    <li data-role="assistant" class="space-y-3">
+      <p class="text-umber-amber text-[0.7rem] font-medium tracking-[0.2em] uppercase">Umber</p>
+      <p data-field="status" hidden class="text-umber-ash animate-pulse text-sm motion-reduce:animate-none">
+        Buscando en el catálogo…
+      </p>
+      <div
+        data-field="body"
+        class="[&_strong]:text-umber-amber space-y-4 leading-relaxed [&_strong]:font-semibold"
+        set:html={renderReply(text)}
+      />
+      <div
+        data-field="error"
+        hidden
+        role="alert"
+        class="rounded-lg border border-red-900/60 bg-red-950/30 p-3 text-sm"
+      >
+        <p data-field="error-message" />
+        <button
+          type="button"
+          data-retry
+          class="text-umber-cream mt-2 font-medium underline underline-offset-4"
+        >
+          Reintentar
+        </button>
+      </div>
+      <div data-field="cards" class="grid gap-3 sm:grid-cols-2" />
+    </li>
+  )
+}

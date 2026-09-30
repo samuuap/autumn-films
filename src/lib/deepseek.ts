@@ -74,7 +74,7 @@ export interface ChatRequestOptions {
   readonly signal?: AbortSignal;
 }
 
-type ChunkStream = AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+export type ChunkStream = AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
 function toSdkMessages(
   messages: readonly ChatMessage[],
@@ -85,6 +85,10 @@ function toSdkMessages(
 /**
  * Llamada de chat en streaming. Devuelve los chunks crudos del SDK, por si el
  * endpoint necesita leer `usage` o `finish_reason`.
+ *
+ * La promesa se resuelve al llegar las cabeceras de la respuesta, así que los
+ * errores del proveedor (clave, saldo, límite de peticiones) saltan aquí y no a
+ * mitad del stream: el endpoint aún puede responder con un código HTTP.
  */
 export async function streamChat(options: ChatRequestOptions): Promise<ChunkStream> {
   const body: DeepSeekParams<OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming> = {
@@ -105,18 +109,27 @@ export async function streamChat(options: ChatRequestOptions): Promise<ChunkStre
   }
 }
 
+/** Reduce un stream ya abierto a sus fragmentos de texto. */
+export async function* textDeltas(stream: ChunkStream): AsyncGenerator<string> {
+  try {
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta.content;
+      if (delta !== undefined && delta !== null && delta.length > 0) {
+        yield delta;
+      }
+    }
+  } catch (error: unknown) {
+    throw new DeepSeekError(`El stream de chat se cortó: ${toError(error).message}`, error);
+  }
+}
+
 /**
- * Igual que `streamChat`, pero ya reducido a los fragmentos de texto. Es lo que
- * consume el endpoint del chat para enviar al navegador.
+ * Igual que `streamChat`, pero ya reducido a los fragmentos de texto. Abre la
+ * conexión en la primera iteración: si hace falta que los errores del proveedor
+ * lleguen antes de empezar a responder, usar `streamChat` + `textDeltas`.
  */
 export async function* streamChatText(options: ChatRequestOptions): AsyncGenerator<string> {
-  const stream = await streamChat(options);
-  for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta.content;
-    if (delta !== undefined && delta !== null && delta.length > 0) {
-      yield delta;
-    }
-  }
+  yield* textDeltas(await streamChat(options));
 }
 
 /**

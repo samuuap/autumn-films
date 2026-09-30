@@ -69,6 +69,31 @@ export class ValidationError extends UmberError {
   }
 }
 
+/** Token de sesión ausente donde hace falta, mal formado o caducado. */
+export class AuthError extends UmberError {
+  constructor(message: string, cause?: unknown) {
+    super(message, { code: 'auth_error', status: 401, cause });
+  }
+}
+
+/** El recurso no existe o RLS no deja verlo, que desde fuera es lo mismo. */
+export class NotFoundError extends UmberError {
+  constructor(message: string, cause?: unknown) {
+    super(message, { code: 'not_found', status: 404, cause });
+  }
+}
+
+/** Demasiadas peticiones seguidas. El mensaje ya está escrito para la persona. */
+export class RateLimitError extends UmberError {
+  /** Segundos hasta poder repetir: va en la cabecera `Retry-After`. */
+  readonly retryAfterSeconds: number;
+
+  constructor(message: string, retryAfterSeconds: number) {
+    super(message, { code: 'rate_limited', status: 429 });
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export function isUmberError(value: unknown): value is UmberError {
   return value instanceof UmberError;
 }

@@ -1,0 +1,64 @@
+---
+/**
+ * Formulario de email y contraseña para entrar o registrarse. Funciona sin
+ * JavaScript: envía a la misma página, que lo procesa en el servidor.
+ */
+interface Props {
+  kind: 'login' | 'signup';
+  email?: string;
+  error?: string | null;
+}
+
+const { kind, email = '', error = null } = Astro.props;
+const inputClass =
+  'bg-umber-surface border-umber-sienna/60 focus:border-umber-amber w-full rounded-lg border px-3 py-2.5 focus:outline-none';
+---
+
+{
+  error !== null && (
+    <p role="alert" class="mt-6 rounded-lg border border-red-900/60 bg-red-950/30 p-3 text-sm">
+      {error}
+    </p>
+  )
+}
+
+<form method="post" class="mt-8 space-y-5">
+  <div class="space-y-1.5">
+    <label for="email" class="text-sm font-medium">Email</label>
+    <input
+      id="email"
+      name="email"
+      type="email"
+      autocomplete="email"
+      required
+      value={email}
+      class={inputClass}
+    />
+  </div>
+  <div class="space-y-1.5">
+    <label for="password" class="text-sm font-medium">Contraseña</label>
+    <input
+      id="password"
+      name="password"
+      type="password"
+      autocomplete={kind === 'login' ? 'current-password' : 'new-password'}
+      minlength={kind === 'signup' ? 8 : undefined}
+      aria-describedby={kind === 'signup' ? 'password-help' : undefined}
+      required
+      class={inputClass}
+    />
+    {
+      kind === 'signup' && (
+        <p id="password-help" class="text-umber-ash text-xs">
+          Mínimo 8 caracteres.
+        </p>
+      )
+    }
+  </div>
+  <button
+    type="submit"
+    class="bg-umber-amber text-umber-base hover:bg-umber-amber/90 w-full rounded-lg px-4 py-2.5 font-semibold transition-colors"
+  >
+    {kind === 'login' ? 'Entrar' : 'Crear cuenta'}
+  </button>
+</form>
