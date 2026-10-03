@@ -83,14 +83,25 @@ export class NotFoundError extends UmberError {
   }
 }
 
-/** Demasiadas peticiones seguidas. El mensaje ya está escrito para la persona. */
+/**
+ * Demasiadas peticiones seguidas. El mensaje ya está escrito para la persona.
+ * Código `trial_used` si quien no tiene cuenta ha gastado su conversación de
+ * prueba del día: la interfaz le ofrece registrarse en vez de un error.
+ */
 export class RateLimitError extends UmberError {
   /** Segundos hasta poder repetir: va en la cabecera `Retry-After`. */
   readonly retryAfterSeconds: number;
 
-  constructor(message: string, retryAfterSeconds: number) {
-    super(message, { code: 'rate_limited', status: 429 });
+  constructor(message: string, retryAfterSeconds: number, code: 'rate_limited' | 'trial_used' = 'rate_limited') {
+    super(message, { code, status: 429 });
     this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/** La conversación ha llegado a su tope de mensajes: hay que empezar otra. */
+export class ConversationFullError extends UmberError {
+  constructor(message: string) {
+    super(message, { code: 'conversation_full', status: 409 });
   }
 }
 

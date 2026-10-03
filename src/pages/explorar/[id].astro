@@ -4,8 +4,15 @@
  * favorito. Llega desde `/explorar` con sus filtros en la URL, y «Explorar» vuelve
  * a ellos. Las plataformas se piden en el servidor, como en favoritos.
  */
+import PosterCard from '@/components/PosterCard.astro';
 import Layout from '@/layouts/Layout.astro';
-import { EXPLORE_PATH, exploreSearch, loadExploreTitle, parseExploreFilters } from '@/lib/explore';
+import {
+  EXPLORE_PATH,
+  exploreSearch,
+  listSimilar,
+  loadExploreTitle,
+  parseExploreFilters,
+} from '@/lib/explore';
 import { listFavoriteIds } from '@/lib/favorites';
 import { regionFromAcceptLanguage } from '@/lib/locale';
 import { lookupPlatforms } from '@/lib/platforms';
@@ -18,16 +25,19 @@ if (item === null) return Astro.redirect(EXPLORE_PATH);
 const { user, supabase } = Astro.locals;
 const region =
   regionFromAcceptLanguage(Astro.request.headers.get('accept-language')) ?? TMDB_DEFAULT_REGION;
-const [{ platforms, saved }, favoriteIds] = await Promise.all([
+const [{ platforms, saved }, favoriteIds, similar] = await Promise.all([
   lookupPlatforms([item], region),
   user === null ? Promise.resolve([]) : listFavoriteIds(supabase),
+  listSimilar(item.id),
 ]);
 // Esperarla aquí: en Vercel, lo que sigue en marcha tras responder puede no terminar.
 await saved;
 const itemPlatforms = platforms[0] ?? null;
 const favorite = favoriteIds.includes(item.id);
 
-const backHref = `${EXPLORE_PATH}${exploreSearch(parseExploreFilters(Astro.url.searchParams))}`;
+// Los filtros de `/explorar` siguen en la URL de las fichas parecidas: «Explorar» vuelve igual a ellos.
+const listSearch = exploreSearch(parseExploreFilters(Astro.url.searchParams));
+const backHref = `${EXPLORE_PATH}${listSearch}`;
 const loginHref = `/entrar?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
 const kind = CHAT_MODE_DEFINITIONS[item.type].label;
 const poster = posterUrl(item.poster_path);
@@ -167,6 +177,23 @@ const otherTitle = item.title_en !== null && item.title_en !== item.title ? item
         </div>
       </div>
     </section>
+
+    {
+      similar.length > 0 && (
+        <section aria-labelledby="mas-como-esta" class="mx-auto max-w-5xl px-5 pb-16">
+          <h2 id="mas-como-esta" class="text-2xl font-semibold">
+            Más como esta
+          </h2>
+          <ul class="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+            {similar.map((title) => (
+              <li>
+                <PosterCard item={title} href={`${EXPLORE_PATH}/${title.id}${listSearch}`} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
   </main>
 </Layout>
 

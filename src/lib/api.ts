@@ -7,6 +7,7 @@ import type { APIContext } from 'astro';
 
 import {
   AuthError,
+  ConversationFullError,
   NotFoundError,
   RateLimitError,
   ValidationError,
@@ -46,7 +47,8 @@ export function publicError(error: unknown): PublicError {
     error instanceof ValidationError ||
     error instanceof AuthError ||
     error instanceof NotFoundError ||
-    error instanceof RateLimitError;
+    error instanceof RateLimitError ||
+    error instanceof ConversationFullError;
   return {
     status: error.status,
     body: {

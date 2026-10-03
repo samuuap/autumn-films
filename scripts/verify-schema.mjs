@@ -54,7 +54,7 @@ console.log(`\nProyecto: ${env.SUPABASE_URL}\n`);
 
 // ─── Estructura ──────────────────────────────────────────────────────────────
 console.log('Estructura');
-for (const table of ['content', 'users_favorites', 'conversations', 'profiles', 'platforms_cache', 'rate_limits']) {
+for (const table of ['content', 'content_similar', 'users_favorites', 'conversations', 'profiles', 'platforms_cache', 'rate_limits']) {
   const { status, body } = await call(`/${table}?select=*&limit=0`, { key: SECRET });
   record(status === 200, `tabla ${table} existe`, status === 200 ? '' : JSON.stringify(body));
 }
@@ -123,6 +123,16 @@ for (const table of ['platforms_cache', 'rate_limits']) {
     status === 200 ? `${body.length} filas, total ${first?.total_count}` : JSON.stringify(body));
 }
 {
+  const { status, body } = await call('/content_similar?select=content_id,rank,similar_id&limit=12');
+  record(status === 200 && Array.isArray(body) && body.length > 0,
+    'anon puede leer los parecidos («Más como esta»)',
+    status === 200 ? `${body.length} filas${body.length === 0 ? ': ¿falta ejecutar load-db.py?' : ''}` : JSON.stringify(body));
+  const write = await call('/content_similar', {
+    method: 'POST', body: { content_id: '00000000-0000-0000-0000-000000000000', rank: 1, similar_id: '00000000-0000-0000-0000-000000000001', similarity: 1 },
+  });
+  record(write.status === 401 || write.status === 403, 'anon NO puede escribir parecidos', `HTTP ${write.status}`);
+}
+{
   const { status, body } = await call('/rpc/content_genres', { method: 'POST', body: {} });
   record(status === 200 && Array.isArray(body) && body.length > 0,
     'anon puede listar los géneros', status === 200 ? `${body.length} géneros` : JSON.stringify(body));
@@ -168,10 +178,35 @@ const seed = (tmdb_id, type) => ({ tmdb_id, type, title: `__verify__ ${type}` })
     bad.status === 404 ? 'la tabla no existe: no prueba nada' : `HTTP ${bad.status}`);
 }
 
+// Las conversaciones y los favoritos necesitan dueño: un usuario de prueba ya
+// confirmado, que se borra al final y se lleva lo suyo en cascada.
+const owner = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
+  method: 'POST',
+  headers: { apikey: SECRET, Authorization: `Bearer ${SECRET}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    email: `umber-verify-${Date.now()}@example.com`, password: crypto.randomUUID(), email_confirm: true,
+  }),
+}).then((response) => response.json());
+record(typeof owner.id === 'string', 'usuario de prueba creado', owner.id ?? JSON.stringify(owner));
+
+{
+  const orphan = await call('/conversations', {
+    method: 'POST', key: SECRET, body: { mode: 'movie', messages: [] },
+  });
+  record(orphan.status >= 400 && orphan.status !== 404, 'una conversación sin user_id no entra', `HTTP ${orphan.status}`);
+
+  const content = await call('/content?select=id&limit=1', { key: SECRET });
+  const contentId = Array.isArray(content.body) ? content.body[0]?.id : null;
+  const noOwner = await call('/users_favorites', { method: 'POST', key: SECRET, body: { content_id: contentId } });
+  const noContent = await call('/users_favorites', { method: 'POST', key: SECRET, body: { user_id: owner.id } });
+  record(noOwner.status >= 400 && noContent.status >= 400 && noOwner.status !== 404,
+    'un favorito sin user_id o sin content_id no entra', `HTTP ${noOwner.status}/${noContent.status}`);
+}
+
 {
   const created = await call('/conversations', {
     method: 'POST', key: SECRET, prefer: 'return=representation',
-    body: { mode: 'movie', messages: [] },
+    body: { user_id: owner.id, mode: 'movie', messages: [] },
   });
   const row = Array.isArray(created.body) ? created.body[0] : null;
   record(created.status === 201 && row !== null, 'insert de prueba en conversations', `HTTP ${created.status}`);
@@ -187,13 +222,13 @@ const seed = (tmdb_id, type) => ({ tmdb_id, type, title: `__verify__ ${type}` })
       after ? `${row.updated_at} → ${after.updated_at}` : 'sin respuesta');
 
     const badMode = await call('/conversations', {
-      method: 'POST', key: SECRET, body: { mode: 'serie', messages: [] },
+      method: 'POST', key: SECRET, body: { user_id: owner.id, mode: 'serie', messages: [] },
     });
     record(badMode.status >= 400, 'check de mode rechaza un modo inexistente', `HTTP ${badMode.status}`);
 
     const modes = await Promise.all(
       ['weekend', 'month'].map((mode) =>
-        call('/conversations', { method: 'POST', key: SECRET, body: { mode, messages: [] } })),
+        call('/conversations', { method: 'POST', key: SECRET, body: { user_id: owner.id, mode, messages: [] } })),
     );
     record(modes.every((m) => m.status === 201),
       'los modos weekend y month de la v2 son válidos en el esquema');
@@ -242,16 +277,19 @@ console.log('\nCaché de plataformas y rate limiting');
 }
 {
   // Clave única por ejecución: una ventana de 60 s de una ejecución anterior no molesta.
+  // Ventana de una hora y no de un minuto: las ventanas van alineadas con el
+  // reloj, y si las tres llamadas cruzaban el cambio de minuto la tercera
+  // entraba en una nueva y la comprobación fallaba sin motivo.
   const key = `__verify__ ${Date.now()}`;
   const hit = () => call('/rpc/hit_rate_limit', {
-    method: 'POST', key: SECRET, body: { p_key: key, p_window_seconds: [60, 86400], p_limits: [2, 100] },
+    method: 'POST', key: SECRET, body: { p_key: key, p_window_seconds: [3600, 86400], p_limits: [2, 100] },
   });
   const first = await hit();
   const second = await hit();
   const third = await hit();
   record(first.body === 0 && second.body === 0,
     'hit_rate_limit deja pasar hasta el límite', `${JSON.stringify(first.body)}, ${JSON.stringify(second.body)}`);
-  record(typeof third.body === 'number' && third.body > 0 && third.body <= 60,
+  record(typeof third.body === 'number' && third.body > 0 && third.body <= 3600,
     'hit_rate_limit rechaza la siguiente y dice cuántos segundos esperar', JSON.stringify(third.body));
 
   const mismatched = await call('/rpc/hit_rate_limit', {
@@ -263,9 +301,14 @@ console.log('\nCaché de plataformas y rate limiting');
 // ─── Limpieza ────────────────────────────────────────────────────────────────
 console.log('\nLimpieza');
 {
-  // La caché de plataformas cae en cascada con los títulos de prueba.
+  // La caché de plataformas cae en cascada con los títulos de prueba, y las
+  // conversaciones con su usuario.
   const a = await call(`/content?title=like.__verify__*`, { method: 'DELETE', key: SECRET });
-  const b = await call(`/conversations?user_id=is.null`, { method: 'DELETE', key: SECRET });
+  const b = owner.id === undefined
+    ? { status: 200 }
+    : await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users/${owner.id}`, {
+        method: 'DELETE', headers: { apikey: SECRET, Authorization: `Bearer ${SECRET}` },
+      });
   const c = await call(`/rate_limits?key=like.__verify__*`, { method: 'DELETE', key: SECRET });
   record(a.status < 300 && b.status < 300 && c.status < 300, 'datos de prueba borrados',
     `HTTP ${a.status}/${b.status}/${c.status}`);

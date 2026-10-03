@@ -36,6 +36,14 @@ la ficha de lo que recomienda y poder guardarlo.
       conversación en vez de empezar otra
 - [x] «Pensando…» hasta el primer fragmento y, desde el 2026-10-03, «Buscando
       títulos que encajen…» mientras busca (evento `searching`): son unos 4 s
+- [x] **Final de la conversación** (2026-10-03): con 5 turnos o menos, «Te
+      quedan N mensajes en esta conversación» encima del cuadro de texto; al
+      llegar a 40 mensajes, el cuadro se cambia por un panel. Con cuenta,
+      «Empezar una nueva»; sin ella, «Aquí termina tu conversación de prueba»
+      con «Crear cuenta» y «Ya tengo cuenta». Lo mismo si el servidor responde
+      `conversation_full` o `trial_used`, sin botón de reintentar. Una
+      conversación guardada que ya llegó al tope se pinta cerrada desde el
+      servidor
 - [x] El texto se repinta como mucho una vez por fotograma
       (`requestAnimationFrame`): cada repintado rehace el HTML de toda la
       respuesta y mide la página, y los fragmentos llegan más deprisa
@@ -116,6 +124,14 @@ producción.
       Todo va en la URL, así que funciona sin JavaScript y se puede compartir;
       la ficha lleva los filtros y «← Explorar» vuelve a ellos. Migración
       `20261003150000`. Probado en Chromium (escritorio e iPhone 13), 27 de 27
+- [x] **«Más como esta»** (2026-10-03): debajo de la ficha de `/explorar/<id>`,
+      los 12 títulos más parecidos del mismo tipo, en la misma rejilla que el
+      listado (`PosterCard`, sacado del listado para no repetirlo) y con los
+      filtros en sus enlaces. No llama a ningún modelo: lee `content_similar`,
+      que calcula el seed (ver la Fase 3), así que no gasta cupo. La ficha
+      tarda unos 150–200 ms. La ficha del chat (`ContentCard`) enlaza a ella,
+      en otra pestaña para no perder una conversación sin sesión. Probado en
+      Chromium, escritorio y móvil, sin violaciones de CSP
 - [ ] **Entrar con Google**: decidido, pendiente de hacer. Hará falta:
   - Un cliente OAuth en Google Cloud y activar el proveedor en Supabase
     (Authentication → Providers), con el *callback* que da el dashboard

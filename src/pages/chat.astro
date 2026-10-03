@@ -23,6 +23,7 @@ import {
   DEFAULT_LOCALE,
   MAX_MESSAGE_CHARS,
   isAvailableChatMode,
+  remainingTurns,
   type ChatMode,
 } from '@/lib/types';
 
@@ -49,6 +50,9 @@ const mode: ChatMode = modeParam;
 const definition = CHAT_MODE_DEFINITIONS[mode];
 
 const messages = conversation?.messages ?? [];
+// Una conversación guardada que ya llegó al tope se abre cerrada, sin cuadro de texto.
+const ended = remainingTurns(messages.length) === 0;
+const startOver = `/chat?mode=${mode}`;
 const region =
   regionFromAcceptLanguage(Astro.request.headers.get('accept-language')) ?? TMDB_DEFAULT_REGION;
 // Las fichas de la conversación guardada: una consulta para todos sus mensajes.
@@ -87,6 +91,7 @@ const suggestions = mode === 'movie' || mode === 'tv' ? SUGGESTIONS[mode] : [];
     data-chat
     data-mode={mode}
     data-conversation-id={conversation?.id ?? ''}
+    data-message-count={messages.length}
     data-favorites={JSON.stringify(favoriteIds)}
     class="mx-auto flex w-full max-w-3xl flex-1 flex-col px-5"
   >
@@ -141,8 +146,10 @@ const suggestions = mode === 'movie' || mode === 'tv' ? SUGGESTIONS[mode] : [];
 
     <form
       data-composer
+      hidden={ended}
       class="bg-umber-base/95 border-umber-surface sticky bottom-0 -mx-5 border-t px-5 pt-3 pb-4 backdrop-blur supports-[backdrop-filter]:bg-umber-base/80"
     >
+      <p data-turns-left hidden role="status" class="text-umber-amber/90 pb-2 text-center text-xs"></p>
       <label for="mensaje" class="sr-only">Cuéntale a Umber cómo te sientes</label>
       <div class="border-umber-sienna/60 focus-within:border-umber-amber bg-umber-surface flex items-end gap-2 rounded-2xl border p-2 transition-colors">
         <textarea
@@ -174,6 +181,50 @@ const suggestions = mode === 'movie' || mode === 'tv' ? SUGGESTIONS[mode] : [];
         Intro para enviar · Mayúsculas + Intro para un salto de línea
       </p>
     </form>
+
+    <div
+      data-conversation-end
+      hidden={!ended}
+      role="status"
+      class="bg-umber-base/95 border-umber-surface sticky bottom-0 -mx-5 border-t px-5 py-6 text-center backdrop-blur"
+    >
+      {
+        user === null ? (
+          <>
+            <p class="font-display text-xl">Aquí termina tu conversación de prueba</p>
+            <p class="text-umber-ash mx-auto mt-2 max-w-md text-sm leading-relaxed">
+              Crea una cuenta gratis para seguir hablando con Umber, guardar tus conversaciones y
+              tus favoritos.
+            </p>
+            <div class="mt-4 flex flex-wrap justify-center gap-3">
+              <a
+                href={`/registro?next=${encodeURIComponent(startOver)}`}
+                class="bg-umber-amber text-umber-base hover:bg-umber-amber/90 rounded-xl px-4 py-2 text-sm font-semibold transition-colors"
+              >
+                Crear cuenta
+              </a>
+              <a
+                href={`/entrar?next=${encodeURIComponent(startOver)}`}
+                class="border-umber-sienna text-umber-cream hover:border-umber-amber rounded-xl border px-4 py-2 text-sm font-medium transition-colors"
+              >
+                Ya tengo cuenta
+              </a>
+            </div>
+          </>
+        ) : (
+          <>
+            <p class="font-display text-xl">Esta conversación ha llegado a su final</p>
+            <p class="text-umber-ash mt-2 text-sm">Tus favoritos siguen guardados.</p>
+            <a
+              href={startOver}
+              class="bg-umber-amber text-umber-base hover:bg-umber-amber/90 mt-4 inline-block rounded-xl px-4 py-2 text-sm font-semibold transition-colors"
+            >
+              Empezar una nueva
+            </a>
+          </>
+        )
+      }
+    </div>
 
     <template data-template="user"><ChatMessage role="user" /></template>
     <template data-template="assistant"><ChatMessage role="assistant" /></template>

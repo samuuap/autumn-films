@@ -16,6 +16,7 @@
     "db:push": "supabase db push",
     "db:verify": "node scripts/verify-schema.mjs",
     "db:verify-rls": "node scripts/verify-rls.mjs",
+    "check:guardrails": "node scripts/check-guardrails.mjs",
     "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
     "embeddings": ".venv/bin/python scripts/embeddings/server.py"
   },

@@ -15,8 +15,9 @@ import {
   type FavoriteEventDetail,
 } from '@/scripts/content-card';
 import {
-  MAX_HISTORY_MESSAGES,
+  CONVERSATION_WARNING_TURNS,
   isChatMode,
+  remainingTurns,
   type ChatHistoryMessage,
   type ChatMode,
   type ChatRequestBody,
@@ -37,6 +38,8 @@ const form = required<HTMLFormElement>(root, '[data-composer]');
 const input = required<HTMLTextAreaElement>(form, 'textarea');
 const sendButton = required<HTMLButtonElement>(form, '[data-send]');
 const stopButton = required<HTMLButtonElement>(form, '[data-stop]');
+const turnsLeftNotice = required<HTMLElement>(form, '[data-turns-left]');
+const conversationEnd = required<HTMLElement>(root, '[data-conversation-end]');
 const emptyState = root.querySelector<HTMLElement>('[data-empty-state]');
 const templates = {
   user: required<HTMLTemplateElement>(root, 'template[data-template="user"]'),
@@ -60,6 +63,8 @@ let conversationId: string | null = root.dataset.conversationId || null;
  * cuántas preguntas lleva y qué candidatos le quedan.
  */
 const pastMessages: ChatHistoryMessage[] = [];
+/** Los que ya traía la página: los de una conversación guardada. */
+const initialMessageCount = Number(root.dataset.messageCount ?? '0');
 const favorites = new Set<string>(JSON.parse(root.dataset.favorites ?? '[]') as string[]);
 let controller: AbortController | null = null;
 
@@ -123,11 +128,39 @@ function resetAssistantMessage(bubble: HTMLElement): void {
   part(bubble, 'cards').replaceChildren();
 }
 
-function showError(bubble: HTMLElement, message: string, retry: () => void): void {
+/** Sin `retry`, no se ofrece reintentar: repetir daría el mismo error. */
+function showError(bubble: HTMLElement, message: string, retry: (() => void) | null): void {
   part(bubble, 'status').hidden = true;
   part(bubble, 'error-message').textContent = message;
   part(bubble, 'error').hidden = false;
-  required<HTMLButtonElement>(bubble, '[data-retry]').onclick = retry;
+  const retryButton = required<HTMLButtonElement>(bubble, '[data-retry]');
+  retryButton.hidden = retry === null;
+  retryButton.onclick = retry;
+}
+
+// ─── Final de la conversación ────────────────────────────────────────────────
+
+/** Errores con los que el servidor dice que aquí ya no caben más mensajes. */
+const END_CODES: ReadonlySet<string> = new Set(['conversation_full', 'trial_used']);
+
+/** Cierra la conversación: fuera el cuadro de texto, y el panel para empezar otra o registrarse. */
+function endConversation(): void {
+  form.hidden = true;
+  conversationEnd.hidden = false;
+}
+
+/** Avisa de los mensajes que quedan cuando son pocos, y cierra al llegar a cero. */
+function updateTurnsLeft(): void {
+  const turns = remainingTurns(initialMessageCount + pastMessages.length);
+  if (turns === 0) {
+    endConversation();
+    return;
+  }
+  turnsLeftNotice.hidden = turns > CONVERSATION_WARNING_TURNS;
+  turnsLeftNotice.textContent =
+    turns === 1
+      ? 'Te queda 1 mensaje en esta conversación.'
+      : `Te quedan ${String(turns)} mensajes en esta conversación.`;
 }
 
 /** Animación de entrada; el CSS está en `global.css`. */
@@ -167,20 +200,20 @@ function setBusy(busy: boolean): void {
 const NETWORK_ERROR = 'No hay conexión con Umber. Revisa tu red y vuelve a intentarlo.';
 const CUT_ERROR = 'La respuesta se ha cortado a medias. Vuelve a intentarlo.';
 
-async function readError(response: Response): Promise<string> {
+async function readError(response: Response): Promise<{ code: string | null; message: string }> {
   try {
     const body: unknown = await response.json();
-    if (isApiErrorBody(body)) return body.error.message;
+    if (isApiErrorBody(body)) return body.error;
   } catch {
     // Sin cuerpo JSON: vale el mensaje genérico.
   }
-  return 'Algo ha fallado por nuestra parte. Vuelve a intentarlo en un momento.';
+  return { code: null, message: 'Algo ha fallado por nuestra parte. Vuelve a intentarlo en un momento.' };
 }
 
 function requestBody(message: string): ChatRequestBody {
   // Con conversación guardada, el servidor lee el historial de Supabase.
   return conversationId === null
-    ? { mode, message, history: pastMessages.slice(-MAX_HISTORY_MESSAGES) }
+    ? { mode, message, history: pastMessages }
     : { mode, message, conversation_id: conversationId };
 }
 
@@ -241,7 +274,10 @@ async function send(message: string, bubble?: HTMLElement): Promise<void> {
     });
     const isStream = response.headers.get('content-type')?.startsWith('text/event-stream') === true;
     if (!response.ok || !isStream || response.body === null) {
-      showError(target, await readError(response), retry);
+      const error = await readError(response);
+      const ended = error.code !== null && END_CODES.has(error.code);
+      showError(target, error.message, ended ? null : retry);
+      if (ended) endConversation();
       return;
     }
 
@@ -271,10 +307,13 @@ async function send(message: string, bubble?: HTMLElement): Promise<void> {
         keepPinned(() => {
           renderCards(target, event.data.recommendations);
         });
+        updateTurnsLeft();
       } else {
         flush();
         finished = true;
-        showError(target, event.data.message, retry);
+        const ended = END_CODES.has(event.data.code);
+        showError(target, event.data.message, ended ? null : retry);
+        if (ended) endConversation();
       }
     }
     if (!finished) {
@@ -349,3 +388,4 @@ root.querySelectorAll<HTMLButtonElement>('[data-suggestion]').forEach((button) =
 
 // En una conversación guardada, abrir la página lleva al último mensaje.
 if (list.children.length > 0) window.scrollTo({ top: document.documentElement.scrollHeight });
+updateTurnsLeft();

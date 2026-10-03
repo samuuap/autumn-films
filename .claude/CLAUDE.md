@@ -23,7 +23,7 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 ```
 /
 ├── src/
-│   ├── components/          # SiteHeader, SiteFooter, ModeCard, ContentCard, ChatMessage, AuthForm
+│   ├── components/          # SiteHeader, SiteFooter, ModeCard, ContentCard, PosterCard, ChatMessage, AuthForm
 │   ├── layouts/
 │   │   └── Layout.astro     # Layout base: tema, tipografías, metadatos, cabecera y pie
 │   ├── middleware.ts        # Sesión de Supabase (cookies) en Astro.locals, en cada petición
@@ -38,7 +38,7 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │   │   ├── conversaciones.astro  # Conversaciones guardadas; POST para borrar una
 │   │   ├── explorar/
 │   │   │   ├── index.astro  # El corpus en carteles: búsqueda, tipo, género, orden, páginas
-│   │   │   └── [id].astro   # Ficha de un título: sinopsis, plataformas, favorito
+│   │   │   └── [id].astro   # Ficha de un título: sinopsis, plataformas, favorito, «Más como esta»
 │   │   ├── auth/
 │   │   │   └── confirm.ts   # Vuelta del enlace del email (code o token_hash)
 │   │   └── api/
@@ -84,14 +84,15 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │       └── global.css       # Tailwind + tema otoñal
 ├── scripts/
 │   ├── verify-schema.mjs    # Comprueba esquema y RLS vía Data API
+│   ├── check-guardrails.mjs # Casos delicados contra el chat: fuera de tema, crisis, piratería…
 │   ├── embeddings/
 │   │   └── server.py        # Qwen3-Embedding local con la API de OpenAI (sin conexión)
 │   └── seed/
 │       ├── common.py        # Entorno, HTTP, JSONL y el texto canónico de cada título
 │       ├── fetch-tmdb.py    # Descarga el universo de candidatos de TMDB
 │       ├── score.py         # autumn_score (3 pasadas de deepseek-flash, media) y selección
-│       ├── embed.py         # Vectoriza el corpus con Qwen3
-│       ├── load-db.py       # Upsert del corpus en Supabase pgvector
+│       ├── embed.py         # Vectoriza el corpus con Qwen3: búsqueda y «sin nombre»
+│       ├── load-db.py       # Upsert del corpus en Supabase pgvector y sus parecidos
 │       ├── search.py        # Búsquedas de control contra el corpus cargado
 │       └── check-embeddings.py  # ¿Da un servicio los mismos vectores que el corpus?
 ├── supabase/
@@ -100,6 +101,7 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 ├── docs/                    # Estado del trabajo por fases (ver abajo)
 ├── public/
 ├── .claude/CLAUDE.md
+├── vercel.json              # Región de las funciones: dub1, junto a Supabase (eu-west-1)
 └── .env.local               # Nunca al repositorio
 ```
 
@@ -158,6 +160,7 @@ npm run db:push    # aplica las migraciones pendientes
 npm run db:verify  # comprueba esquema, RLS y restricciones vía Data API
 npm run db:verify-rls  # comprueba el aislamiento entre dos usuarios reales
 npm run db:types   # regenera src/lib/database.types.ts desde el esquema real
+npm run check:guardrails  # 17 casos delicados contra el chat (npm run dev); repetir al tocar system.md
 
 # Seed del corpus (una vez, o para actualizaciones). Python ≥ 3.10: el del sistema es 3.9
 python3.12 -m venv .venv && source .venv/bin/activate
@@ -165,8 +168,11 @@ pip install -r scripts/embeddings/requirements.txt -r scripts/seed/requirements.
 npm run embeddings                  # en otra terminal
 python scripts/seed/fetch-tmdb.py   # universo de ~17.000 títulos de TMDB
 python scripts/seed/score.py        # autumn_score y selección de los ~5.000
-python scripts/seed/embed.py        # vectoriza el corpus
-python scripts/seed/load-db.py      # upsert en Supabase (--prune borra lo que sobra)
+python scripts/seed/embed.py        # vectoriza el corpus (búsqueda y «sin nombre»)
+python scripts/seed/load-db.py      # upsert en Supabase y parecidos (--prune borra lo que sobra)
+python scripts/seed/load-db.py --similar-only   # solo los parecidos, sin reescribir content
+# Tras recargar muchos vectores, reconstruir el índice: el grafo HNSW se degrada
+npx supabase db query --linked "reindex index public.content_embedding_hnsw_idx"
 python scripts/seed/search.py "tarde de lluvia"   # búsquedas de control
 python scripts/seed/check-embeddings.py            # ¿da el servicio de .env.local los vectores del corpus?
 ```
@@ -226,16 +232,18 @@ Qué contiene cada columna, tal como la rellena el seed:
   Halloween cuenta si la película va de él, y el terror sin Halloween ni ambiente
   otoñal puntúa 40 como mucho. El prompt está en `scripts/seed/score.py`
 - `embedding`: de un texto en inglés (título, sinopsis, géneros y keywords),
-  con la sinopsis española solo si falta la inglesa. Lo construye
-  `document_text()` en `scripts/seed/common.py`
+  con la sinopsis española solo si falta la inglesa. Lleva también el título
+  español cuando es otro (3.944 de 5.000): sin él, «Cadena perpetua» no
+  encontraba *The Shawshank Redemption*. Lo construye `document_text()` en
+  `scripts/seed/common.py`
 
 ### `users_favorites`
 
 ```sql
 CREATE TABLE users_favorites (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  content_id  UUID REFERENCES content(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  content_id  UUID NOT NULL REFERENCES content(id) ON DELETE CASCADE,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id, content_id)
 );
@@ -270,7 +278,7 @@ is_username_available(p_username TEXT) RETURNS BOOLEAN
 ```sql
 CREATE TABLE conversations (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   mode        TEXT NOT NULL CHECK (mode IN ('movie', 'tv', 'weekend', 'month')),
   messages    JSONB NOT NULL DEFAULT '[]',  -- { role, content, created_at } y, en los de
                                            -- Umber, recommendation_ids y language
@@ -319,6 +327,9 @@ no se ve en la firma:
   como mucho 40 filas (`ef_search`) y el filtro por tipo se aplica después: con
   solo 500 series, las búsquedas de `tv` se quedaban en 2 o 3 candidatos. No
   quitarlo, y si se recrea la función, volver a ponerlo
+- Y `SET hnsw.ef_search = 100` (por defecto, 40): con 40 el índice devolvía el
+  94 % de los 10 mejores, y en búsquedas por título el 70 %; con 100, el 97,5 %
+  (`20261003190000`). Lo mismo: si se recrea la función, volver a ponerlo
 - El `min_score` por defecto (0.5) es alto para este modelo: en películas, lo
   bueno cae entre 0,40 y 0,55, y en series, que son 500, puede quedarse en 0,32
 - **No pasarle un `min_score` que pocas filas superen.** La búsqueda iterativa
@@ -345,6 +356,30 @@ content_genres(p_type TEXT DEFAULT NULL) RETURNS TABLE (genre TEXT, titles BIGIN
 - Se usan desde `src/lib/explore.ts`; sus filas pasan por `ExploreItem` en
   `src/lib/types.ts`, por la misma razón que `search_content`
 
+### `content_similar` — «Más como esta»
+
+```sql
+CREATE TABLE content_similar (
+  content_id  UUID NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  rank        SMALLINT NOT NULL CHECK (rank BETWEEN 1 AND 30),  -- 1, el más parecido
+  similar_id  UUID NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  similarity  FLOAT NOT NULL,
+  PRIMARY KEY (content_id, rank)
+);
+```
+
+- Los 12 más parecidos a cada título, del mismo tipo. **Los calcula el seed**
+  (`load-db.py`), no la web: la ficha solo los lee, sin búsqueda vectorial
+- Se comparan con un **segundo vector, de lo que cuenta cada título sin su
+  nombre** (`plot_text()` en `scripts/seed/common.py`). Con el de búsqueda, que
+  lleva el título, dos títulos se parecían por cómo se llaman: *Cuando Harry
+  encontró a Sally* junto a *Harry, un amigo que os quiere*, un thriller
+- Ese vector no va a la base (`data/plot-embeddings.jsonl`): otra columna de
+  1024 dimensiones y su índice costarían unos 60 MB del plan gratuito. Por
+  fuerza bruta en numpy, exacto; de los 24 más parecidos, los 12 primeros tras
+  sumar `0,2 × autumn_score`, como el chat
+- Lectura pública, como el corpus; sin políticas de escritura
+
 ### `platforms_cache` y `rate_limits` — solo servidor
 
 ```sql
@@ -355,7 +390,7 @@ CREATE TABLE platforms_cache (
 );
 
 CREATE TABLE rate_limits (
-  key            TEXT NOT NULL,      -- '<ámbito>:user:<uuid>' o '<ámbito>:ip:<dirección>' (IPv6: su /64)
+  key            TEXT NOT NULL,      -- '<ámbito>:user:<uuid>', '<ámbito>:ip:<dirección>' (IPv6: su /64) o '<ámbito>:global'
   window_seconds INTEGER NOT NULL,
   window_start   TIMESTAMPTZ NOT NULL,
   expires_at     TIMESTAMPTZ NOT NULL,
@@ -386,7 +421,8 @@ hit_rate_limit(p_key TEXT, p_window_seconds INT[], p_limits INT[]) RETURNS INTEG
 
 Umber conversa: pregunta de 2 a 4 veces para entender el ánimo, decide él cuándo
 buscar y busca con un resumen que escribe él. Si piden otra, la saca de los
-mismos 10 candidatos hasta agotarlos. Reglas y estado en `src/lib/turns.ts`.
+mismos 10 candidatos hasta agotarlos. Si nombran un título concreto, lo comprueba
+en cualquier turno con `buscar_por_titulo`. Reglas y estado en `src/lib/turns.ts`.
 
 ```
 Usuario escribe
@@ -394,7 +430,9 @@ Usuario escribe
 POST /api/chat → validar (parseChatRequest)
       ↓
 A la vez:
-  - Rate limit (hit_rate_limit): 8/min; 300/día con sesión, 60/día por IP sin ella → 429
+  - Rate limit (hit_rate_limit): 8/min; 50/día con cuenta; sin ella, una
+    conversación de prueba al día por IP (20 mensajes, `trial_used`); y, si
+    cabe, 300/día entre todos (techo del gasto de DeepSeek) → 429
   - Historial: de Supabase si hay conversation_id, si no el que manda el cliente
       ↓
 Estado (conversationState): preguntas seguidas, última búsqueda, candidatos que
@@ -402,9 +440,13 @@ quedan. Idioma de la respuesta (detectMessageLanguage)
       ↓
 Candidatos que quedan de la última búsqueda: de la base por id, con plataformas
       ↓
-DeepSeek (`deepseek-flash`) con la herramienta buscar_titulos. tool_choice:
-none hasta haber preguntado 2 veces · required con 4 preguntas seguidas · auto el resto
+DeepSeek (`deepseek-flash`) con dos herramientas. buscar_por_titulo, siempre;
+buscar_titulos (ánimo), solo tras 2 preguntas. tool_choice required con 4
+preguntas seguidas · auto el resto
   ├─ texto: una pregunta, u «otra» de los que quedan → al cliente
+  ├─ buscar_por_titulo(«Cadena perpetua / The Shawshank Redemption»):
+  │     Los que se llaman así primero, y parecidos hasta 10. Si no está, no
+  │     cuenta como búsqueda: Umber lo dice y sigue preguntando
   └─ buscar_titulos(resumen en inglés):
         Evento `searching` al cliente («Buscando títulos que encajen…»)
               ↓
@@ -433,22 +475,29 @@ tiene un aviso en pantalla. Por eso un fallo del buscador llega como evento
 Contrato de `POST /api/chat`, tipado en `src/lib/types.ts`:
 
 - **Cuerpo** (`ChatRequestBody`): `mode`, `message` (≤ 1.000 caracteres) y,
-  opcionales, `history` (≤ 40 mensajes `user`/`assistant`, solo sin
-  conversación guardada), `conversation_id`, `locale` y `region`. Los mensajes
-  de Umber del historial llevan lo que devolvió `done`: `search` y
-  `recommendation_ids`. Sin eso, el servidor no sabe qué candidatos le quedan
+  opcionales, `history` (mensajes `user`/`assistant`, solo sin conversación
+  guardada; el navegador manda la conversación entera), `conversation_id`,
+  `locale` y `region`. Los mensajes de Umber del historial llevan lo que
+  devolvió `done`: `search` y `recommendation_ids`. Sin eso, el servidor no sabe
+  qué candidatos le quedan
+- **Tope por conversación**: 40 mensajes contando los de Umber
+  (`MAX_CONVERSATION_MESSAGES`, 20 turnos). El que no cabe recibe 409
+  `conversation_full`. En los dos últimos turnos Umber va cerrando, y el chat
+  avisa cuando quedan 5. Para `conversation_full` y `trial_used`, la interfaz
+  muestra un panel (empezar otra, o crear cuenta) en vez de un error
 - **Sesión**: la de las cookies (el navegador) o `Authorization: Bearer
   <access_token>` (scripts). Sin ninguna se chatea sin guardar; con un token
   inválido o caducado, 401
 - **Respuesta** (`ChatStreamEvent`): `text/event-stream` con `delta { text }`
   por fragmento, `searching {}` justo antes de buscar y, al final, `done {
-  conversation_id, recommendations, search }` o `error { code, message }`. `recommendations` trae la ficha de cada título que
-  Umber ha nombrado (vacío si ha preguntado): id del corpus, póster y
-  plataformas. `search` es la búsqueda del turno (resumen y candidatos), o `null`
+  conversation_id, recommendations, search }` o `error { code, message }`.
+  `recommendations` trae la ficha de cada título que Umber ha nombrado (vacío
+  si ha preguntado): id del corpus, póster y plataformas. `search` es la
+  búsqueda del turno (resumen y candidatos), o `null`
 - **Errores antes de abrir el stream** (validar, sesión, rate limit, historial,
   abrir DeepSeek): JSON `{ error: { code, message } }` con el `status` del error
-  tipado (400, 401, 404, 429, 502). `message` se puede mostrar tal cual. El 429
-  (`rate_limited`) lleva `Retry-After` en segundos. Lo que falla después,
+  tipado (400, 401, 404, 409, 429, 502). `message` se puede mostrar tal cual. El
+  429 (`rate_limited` o `trial_used`) lleva `Retry-After` en segundos. Lo que falla después,
   búsqueda incluida, llega como evento `error` con el mismo `code` y `message`
 
 Los otros dos endpoints, con el mismo formato de error:
@@ -626,6 +675,13 @@ Tipografía UI:       Inter (sans-serif)
   sus directivas. No funciona en `astro dev`: se prueba sobre el build
 - `src/middleware.ts` añade `X-Content-Type-Options`, `X-Frame-Options` y
   `Referrer-Policy` a todas las respuestas
+- **Guardarraíles de conversación** en `system.md` («De qué hablas»): solo cine
+  y series, sin sermones; crisis (no querer vivir, hacerse daño) antes que el
+  cine, con el 024 y el 112 y sin hablar de películas en ese mensaje; nada de
+  piratería (se comprueba el título y se dice dónde verlo legalmente) ni de
+  contenido sexual explícito; sin suponer el género. Probados con 17 casos
+  (ver `docs/fase-4-api-chat.md`): al tocar `system.md`, repetirlos. Los
+  números de teléfono van sin negrita: la negrita marca títulos
 
 ---
 

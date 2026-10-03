@@ -4,6 +4,7 @@
  * Todo va en la URL (`?q=&type=&genre=&sort=&page=`), así que funciona sin
  * JavaScript y cada vista se puede compartir. La lógica está en `src/lib/explore.ts`.
  */
+import PosterCard from '@/components/PosterCard.astro';
 import Layout from '@/layouts/Layout.astro';
 import {
   EXPLORE_PAGE_SIZE,
@@ -17,8 +18,7 @@ import {
   parseExploreFilters,
   type ExploreFilters,
 } from '@/lib/explore';
-import { posterUrl } from '@/lib/tmdb';
-import { CHAT_MODE_DEFINITIONS, type ContentType } from '@/lib/types';
+import type { ContentType } from '@/lib/types';
 
 const requested = parseExploreFilters(Astro.url.searchParams);
 const genres = await listGenres(requested.type);
@@ -154,38 +154,11 @@ const labelClass = 'text-umber-ash text-[0.7rem] tracking-[0.15em] uppercase';
         </div>
       ) : (
         <ul class="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-          {items.map((item, index) => {
-            const poster = posterUrl(item.poster_path, 'w342');
-            return (
-              <li>
-                <a href={`${EXPLORE_PATH}/${item.id}${detailSearch}`} class="group block">
-                  <div class="bg-umber-surface ring-umber-surface group-hover:ring-umber-amber/70 group-focus-visible:ring-umber-amber relative aspect-[2/3] overflow-hidden rounded-lg ring-1 transition-shadow duration-300">
-                    {poster === null ? (
-                      <div class="text-umber-ash flex h-full items-center justify-center p-3 text-center text-xs">
-                        Sin cartel
-                      </div>
-                    ) : (
-                      <img
-                        src={poster}
-                        alt=""
-                        width="342"
-                        height="513"
-                        loading={index < EAGER_POSTERS ? 'eager' : 'lazy'}
-                        decoding="async"
-                        class="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-                      />
-                    )}
-                  </div>
-                  <p class="group-hover:text-umber-amber mt-2 line-clamp-2 text-sm leading-snug transition-colors">
-                    {item.title}
-                  </p>
-                  <p class="text-umber-ash mt-0.5 text-xs">
-                    {[item.year, CHAT_MODE_DEFINITIONS[item.type].label].filter((part) => part !== null).join(' · ')}
-                  </p>
-                </a>
-              </li>
-            );
-          })}
+          {items.map((item, index) => (
+            <li>
+              <PosterCard item={item} href={`${EXPLORE_PATH}/${item.id}${detailSearch}`} eager={index < EAGER_POSTERS} />
+            </li>
+          ))}
         </ul>
       )
     }

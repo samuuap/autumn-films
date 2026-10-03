@@ -73,14 +73,12 @@ function rankScore(candidate: ContentCandidate): number {
 }
 
 /**
- * Vectoriza `query` como consulta, busca en el corpus y devuelve los mejores
- * reordenados. `search_content` trae las dos sinopsis: 65 títulos no tienen la
- * española, y sin ninguna el modelo tendría que imaginarse la película.
+ * Vectoriza `query` como consulta y trae del corpus los `SEARCH_POOL_SIZE` más
+ * parecidos que pasan el suelo, reordenados. `search_content` trae las dos
+ * sinopsis: 65 títulos no tienen la española, y sin ninguna el modelo tendría
+ * que imaginarse la película.
  */
-export async function searchCandidates(
-  query: string,
-  options: SearchOptions,
-): Promise<RankedCandidate[]> {
+async function searchPool(query: string, contentType: ContentType | null): Promise<RankedCandidate[]> {
   const vector = await embedQuery(query);
 
   const rows = unwrap(
@@ -88,21 +86,71 @@ export async function searchCandidates(
       query_embedding: toPgVector(vector),
       match_count: SEARCH_POOL_SIZE,
       min_score: NO_DATABASE_THRESHOLD,
-      ...(options.contentType === null ? {} : { content_type: options.contentType }),
+      ...(contentType === null ? {} : { content_type: contentType }),
     }),
   );
 
-  const exclude = options.exclude;
   return rows
     // `type` sale como string del generador: se comprueba en vez de suponerlo.
     .flatMap((row): ContentCandidate[] =>
       row.type === 'movie' || row.type === 'tv' ? [{ ...row, type: row.type }] : [],
     )
     .filter((candidate) => candidate.similarity >= SEARCH_MIN_SIMILARITY)
-    .filter((candidate) => exclude === undefined || !exclude(candidate))
     .map((candidate) => ({ ...candidate, rank_score: rankScore(candidate) }))
-    .sort((a, b) => b.rank_score - a.rank_score)
+    .sort((a, b) => b.rank_score - a.rank_score);
+}
+
+/** Busca por ánimo: los mejores de `query`, sin los excluidos. */
+export async function searchCandidates(
+  query: string,
+  options: SearchOptions,
+): Promise<RankedCandidate[]> {
+  const exclude = options.exclude;
+  return (await searchPool(query, options.contentType))
+    .filter((candidate) => exclude === undefined || !exclude(candidate))
     .slice(0, options.limit ?? DEFAULT_CANDIDATE_COUNT);
+}
+
+/** Minúsculas, sin tildes ni puntuación: «¡Olvídate de mí!» y «olvidate de mi» son iguales. */
+export function normalizeTitle(title: string): string {
+  return title
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+export interface TitleSearch {
+  /** Los que se llaman como alguno de los títulos pedidos, en español o en inglés. */
+  readonly exact: RankedCandidate[];
+  /** Los más parecidos, sin los excluidos: para «otra» o «algo como esta». */
+  readonly similar: RankedCandidate[];
+}
+
+/**
+ * Busca títulos concretos. El vector del título los encuentra (el texto
+ * vectorizado lleva el español y el inglés), pero entre muchos de similitud
+ * parecida, y el otoño podría dejarlos fuera al reordenar: por eso los que
+ * coinciden de nombre van aparte, sin excluir los ya recomendados, que alguien
+ * puede pedir de nuevo.
+ */
+export async function searchTitles(
+  titles: readonly string[],
+  options: SearchOptions,
+): Promise<TitleSearch> {
+  const wanted = new Set(titles.map(normalizeTitle));
+  const isWanted = (candidate: ContentCandidate): boolean =>
+    wanted.has(normalizeTitle(candidate.title)) ||
+    (candidate.title_en !== null && wanted.has(normalizeTitle(candidate.title_en)));
+
+  const pool = await searchPool(titles.join(' / '), options.contentType);
+  const exact = pool.filter(isWanted);
+  const exclude = options.exclude;
+  const similar = pool
+    .filter((candidate) => !isWanted(candidate) && (exclude === undefined || !exclude(candidate)))
+    .slice(0, Math.max(0, (options.limit ?? DEFAULT_CANDIDATE_COUNT) - exact.length));
+  return { exact, similar };
 }
 
 /** Cómo se recuerda una búsqueda en la conversación: solo ids y similitud, en su orden. */

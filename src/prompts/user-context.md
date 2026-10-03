@@ -52,8 +52,10 @@
 
 ## Tu tarea
 
-Según el punto en que está la conversación, haz una de estas tres cosas:
+Según el punto en que está la conversación, haz una de estas cosas:
 
+- **Comprobar un título**: si nombra uno concreto, llama a `buscar_por_titulo`,
+  en cualquier turno.
 - **Preguntar**: una sola pregunta corta para entender mejor su ánimo. Sin
   nombrar ninguna película.
 - **Buscar**: llama a `buscar_titulos` con un resumen de su ánimo. Te devolverá

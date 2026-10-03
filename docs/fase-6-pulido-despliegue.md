@@ -43,12 +43,28 @@ coste bajo control.
       muestra el título español
 - [x] Ajustar la región de streaming de TMDB según el idioma, en vez de `ES`
       fijo: el chat, `/favoritos` y `/api/tmdb` ya la sacan de `Accept-Language`
-- [ ] **Encontrar un título por su nombre en español.** A «¿Tienes El padrino?»
-      Umber contesta que no la tiene, aunque está en el corpus; a «Do you have The
-      Godfather?» la encuentra (2026-09-30). `document_text()` en
-      `scripts/seed/common.py` solo mete el título inglés en el texto vectorizado.
-      Añadir el español obliga a volver a vectorizar el corpus (unos 5 minutos,
-      sin coste de DeepSeek) y a repetir las búsquedas de control
+- [x] **Encontrar un título por su nombre en español** (2026-10-03). Eran dos
+      fallos:
+      1. **El texto vectorizado** solo llevaba el título inglés. Ahora
+         `document_text()` añade el español cuando es otro (3.944 de 5.000).
+         Corpus revectorizado en Cloudflare (124 lotes, gratis) y recargado.
+         Búsqueda exacta, puesto del título antes → después: «El padrino» 72 → 3,
+         «Cadena perpetua» 225 → 9, «Perdida» 45 → 2, «El silencio de los
+         corderos» 17 → 1; los títulos ingleses siguen en el 1. En las búsquedas
+         por ánimo con resúmenes en inglés (lo que usa el chat) coinciden 7,1 de
+         cada 10 resultados, sin empeorar a ojo
+      2. **Umber no llegaba a buscar.** `system.md` le pedía decir «no lo tengo»
+         de cualquier título que no le hubiera dado una búsqueda, y en los dos
+         primeros turnos no puede buscar. Ahora tiene `buscar_por_titulo`, en
+         cualquier turno (ver la Fase 4). Probado con el chat: *El padrino*,
+         *Cadena perpetua*, *Perdida*, *The Godfather* y *Stranger Things*
+         encontrados, también como primer mensaje; *Titanic*, que no está, lo
+         dice y sigue preguntando
+- [x] **Índice HNSW tras la recarga.** Actualizar casi todo el corpus degradó el
+      grafo: devolvía el 92,5 % de los 10 mejores frente a la búsqueda exacta, y
+      se dejaba *La llegada* buscando «La llegada». `REINDEX` (de 70 a 39 MB) lo
+      subió al 94 %, y `ef_search` 100 en `search_content`, al 97,5 %; las
+      búsquedas por ánimo, al 100 %. Medido en 20 consultas
 
 ### Despliegue
 
@@ -111,18 +127,24 @@ coste bajo control.
       por usuario o por IP (`src/lib/rate-limit.ts`)
 - [x] `SUPABASE_SECRET_KEY` en las variables de Vercel, que el rate limiting del
       chat necesita
-- [ ] **Región de las funciones de Vercel junto a Supabase** (`eu-west-1`,
-      Irlanda: `dub1`). Por defecto Vercel las pone en `iad1` (Washington). Cada
+- [x] **Región de las funciones de Vercel junto a Supabase** (`eu-west-1`,
+      Irlanda: `dub1`), en `vercel.json` (2026-10-03). Al desplegar, comprobar
+      en los logs de la función que corre en `dub1`; si no, se elige en Project
+      Settings → Functions. Por defecto Vercel las pone en `iad1` (Washington). Cada
       mensaje del chat hace al menos tres viajes a Supabase antes del primer token
       (rate limit, búsqueda, caché de plataformas), y desde local ya cuestan unos
       120 ms cada uno. En `iad1` los tres cruzarían el Atlántico, con el primer
       byte ya en el límite de los 2 s (ver la tabla de la Fase 4)
 - [ ] Alguna forma de ver los errores en producción, aunque sea los logs de
       Vercel
+- [x] **Tope global de gasto de DeepSeek** (2026-10-03): 300 mensajes al día
+      entre todos (`chat:global` en `src/lib/rate-limit.ts`), unos 0,30 USD como
+      mucho. Solo cuenta lo que cabe en el límite de cada persona: si contara lo
+      rechazado, una sola IP insistiendo agotaría el cupo de todos. Por persona,
+      50 al día con cuenta y una conversación de prueba (20) sin ella: ninguna
+      sola agota el cupo global (ver la Fase 4)
 - [ ] Vigilar el gasto de DeepSeek. `deepseek-flash` es barato, pero el coste va
-      por conversación. El rate limiting pone techo por persona, no en total:
-      muchas IPs a la vez siguen sin tope. Si hace falta, un límite global diario
-      es otra regla de `hit_rate_limit` con una clave fija. El endpoint
+      por conversación. El endpoint
       `/user/balance` de DeepSeek sirve para consultarlo por API. A 2026-09-30 la
       cuenta tiene 9,58 USD, tras recargar. Repuntuar el corpus entero (3 pasadas)
       costó unos 1,20 USD

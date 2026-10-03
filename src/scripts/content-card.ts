@@ -43,9 +43,16 @@ function setText(card: HTMLElement, name: string, value: string | null): void {
 }
 
 /** Rellena una ficha clonada de la plantilla. */
+/** La ficha de `/explorar`, abierta por «Más como esta». */
+export function similarHref(contentId: string): string {
+  return `/explorar/${contentId}#mas-como-esta`;
+}
+
 export function fillContentCard(card: HTMLElement, item: Recommendation, favorite: boolean): void {
   const description = describeCard(item);
   card.dataset.contentId = item.id;
+  const similarLink = field<HTMLAnchorElement>(card, 'similar-link');
+  if (similarLink !== null) similarLink.href = similarHref(item.id);
 
   setText(card, 'kind', description.kind);
   setText(card, 'title', description.title);

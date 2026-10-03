@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 UNIVERSE_PATH = DATA_DIR / "universe.jsonl"  # fetch-tmdb.py
 CORPUS_PATH = DATA_DIR / "corpus.jsonl"  # score.py
 EMBEDDINGS_PATH = DATA_DIR / "embeddings.jsonl"  # embed.py
+PLOT_EMBEDDINGS_PATH = DATA_DIR / "plot-embeddings.jsonl"  # embed.py
 
 CONTENT_TYPES = ("movie", "tv")
 
@@ -121,15 +123,51 @@ def format_query(text: str) -> str:
 
 DOCUMENT_KEYWORD_LIMIT = 20
 
+# «Más como esta» (load-db.py): de los SIMILAR_POOL más parecidos, los
+# SIMILAR_COUNT primeros tras reordenar como el chat. AUTUMN_WEIGHT tiene que
+# coincidir con el de `src/lib/search.ts`.
+AUTUMN_WEIGHT = 0.2
+SIMILAR_POOL = 24
+SIMILAR_COUNT = 12
+
+
+def comparable_title(title: str) -> str:
+    """Sin tildes, mayúsculas ni puntuación: «It (Eso)» e «It» siguen siendo distintos, «IT» e «It» no."""
+    stripped = "".join(c for c in unicodedata.normalize("NFD", title) if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^\w]+", " ", stripped.lower()).strip()
+
 
 def document_text(row: dict[str, Any]) -> str:
     """Texto canónico que se vectoriza de cada título. Va sin instrucción: es un documento.
 
     En inglés, con la sinopsis española solo si falta la inglesa: TMDB tiene las
     keywords únicamente en inglés y sus sinopsis inglesas son más completas.
+
+    Lleva también el título español cuando no es el mismo (3.944 de 5.000): sin
+    él, «Cadena perpetua» o «Perdida» no encontraban *The Shawshank Redemption*
+    ni *Gone Girl*. Es el título oficial de TMDB, no una traducción.
     """
     year = f" ({row['year']})" if row["year"] else ""
-    parts = [f"{row['title_en']}{year}.", row["synopsis_en"] or row["synopsis"]]
+    parts = [f"{row['title_en']}{year}."]
+    if comparable_title(row["title"]) != comparable_title(row["title_en"]):
+        parts.append(f"Spanish title: {row['title']}.")
+    parts.append(row["synopsis_en"] or row["synopsis"])
+    if row["genres_en"]:
+        parts.append(f"Genres: {', '.join(row['genres_en'])}.")
+    if row["keywords"]:
+        parts.append(f"Keywords: {', '.join(row['keywords'][:DOCUMENT_KEYWORD_LIMIT])}.")
+    return normalize_for_embedding(" ".join(parts))
+
+
+def plot_text(row: dict[str, Any]) -> str:
+    """Lo que cuenta un título, sin su nombre ni su año: con este texto se comparan
+    títulos entre sí («Más como esta»). Va sin instrucción, como `document_text`.
+
+    Con el nombre dentro, dos títulos se parecían por cómo se llaman: *Cuando
+    Harry encontró a Sally* salía junto a *Harry, un amigo que os quiere*, que es
+    un thriller. Para buscar por ánimo no molesta; para comparar títulos, sí.
+    """
+    parts = [row["synopsis_en"] or row["synopsis"]]
     if row["genres_en"]:
         parts.append(f"Genres: {', '.join(row['genres_en'])}.")
     if row["keywords"]:

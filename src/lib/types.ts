@@ -193,8 +193,20 @@ export interface StoredChatMessage extends ChatMessage, AssistantTurnMeta {
 
 /** Un estado de ánimo cabe de sobra; más es pegar documentos, no conversar. */
 export const MAX_MESSAGE_CHARS = 1000;
-/** Mensajes de historial que acepta el endpoint. El navegador recorta a esta cifra. */
-export const MAX_HISTORY_MESSAGES = 40;
+/**
+ * Mensajes de una conversación, contando los de Umber: 20 turnos. Una normal
+ * son de 10 a 20 (2 a 4 preguntas, la recomendación y algún «otra»). Decisión
+ * de producto (2026-10-03): que ninguna se alargue sin fin. Sin cuenta, es
+ * también la conversación de prueba del día.
+ */
+export const MAX_CONVERSATION_MESSAGES = 40;
+/** Con cuántos turnos por delante empieza el chat a avisar. */
+export const CONVERSATION_WARNING_TURNS = 5;
+
+/** Turnos (mensaje de la persona y respuesta de Umber) que le caben a una conversación con `messages`. */
+export function remainingTurns(messages: number): number {
+  return Math.max(0, Math.floor((MAX_CONVERSATION_MESSAGES - messages) / 2));
+}
 
 /** Cuerpo de `POST /api/chat`. Lo valida `parseChatRequest` en `src/lib/chat.ts`. */
 export interface ChatRequestBody {

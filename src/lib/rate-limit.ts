@@ -14,6 +14,7 @@
  */
 import { RateLimitError } from '@/lib/errors';
 import { getSupabaseAdminClient, unwrap } from '@/lib/supabase';
+import { MAX_CONVERSATION_MESSAGES } from '@/lib/types';
 
 export interface RateLimitRule {
   readonly windowSeconds: number;
@@ -28,6 +29,12 @@ export type RateLimitScope = 'chat' | 'search';
 interface ScopeLimits {
   readonly user: readonly RateLimitRule[];
   readonly anonymous: readonly RateLimitRule[];
+  /**
+   * Entre todos: el techo del gasto total. Solo cuenta las peticiones que caben
+   * en el límite de la persona; si contara las rechazadas, una sola IP
+   * insistiendo agotaría el cupo de todos en segundos.
+   */
+  readonly global?: readonly RateLimitRule[];
   /** Lo que se cuenta, para el mensaje: «Has llegado al límite de {noun} de hoy». */
   readonly noun: string;
 }
@@ -35,20 +42,28 @@ interface ScopeLimits {
 export const RATE_LIMITS: Readonly<Record<RateLimitScope, ScopeLimits>> = {
   /*
    * Cada respuesta tarda varios segundos en llegar: nadie escribe ocho mensajes
-   * por minuto a mano. El diario es el techo del gasto por persona, y sin sesión
-   * es más bajo: crear una cuenta exige confirmar un email, cambiar de IP no.
+   * por minuto a mano. Decisión de producto (2026-10-03): con cuenta, 50 al día,
+   * dos o tres conversaciones, y así ninguna cuenta sola agota el cupo global.
+   * Sin cuenta, una conversación de prueba al día por conexión, como gancho para
+   * registrarse: crear una cuenta exige confirmar un email, cambiar de IP no.
    * Detrás de una IP puede haber varias personas (una oficina, el CGNAT de un
-   * operador móvil), y por eso no es más bajo todavía.
+   * operador móvil): comparten la prueba, y por eso es por día y no para siempre.
    */
   chat: {
     user: [
       { windowSeconds: MINUTE, limit: 8 },
-      { windowSeconds: DAY, limit: 300 },
+      { windowSeconds: DAY, limit: 50 },
     ],
     anonymous: [
       { windowSeconds: MINUTE, limit: 8 },
-      { windowSeconds: DAY, limit: 60 },
+      { windowSeconds: DAY, limit: MAX_CONVERSATION_MESSAGES / 2 },
     ],
+    /*
+     * Decisión de producto (2026-10-03): unos 0,30 USD de DeepSeek al día como
+     * mucho. Un mensaje cuesta algo menos de 0,001 USD, estimado de lo que costó
+     * puntuar el corpus con llamadas de tamaño parecido. Subirlo con el tráfico.
+     */
+    global: [{ windowSeconds: DAY, limit: 300 }],
     noun: 'mensajes',
   },
   /*
@@ -118,13 +133,26 @@ function formatWait(seconds: number): string {
   return hours === 1 ? '1 hora' : `${String(hours)} horas`;
 }
 
-function limitMessage(scope: RateLimitScope, retryAfterSeconds: number, anonymous: boolean): string {
+function limitError(scope: RateLimitScope, retryAfterSeconds: number, anonymous: boolean): RateLimitError {
   // Solo la ventana diaria hace esperar más de un minuto.
   if (retryAfterSeconds <= MINUTE) {
-    return `Vas muy deprisa. Espera ${formatWait(retryAfterSeconds)} y vuelve a intentarlo.`;
+    return new RateLimitError(
+      `Vas muy deprisa. Espera ${formatWait(retryAfterSeconds)} y vuelve a intentarlo.`,
+      retryAfterSeconds,
+    );
+  }
+  if (anonymous && scope === 'chat') {
+    return new RateLimitError(
+      `Ya has usado la conversación de prueba de hoy. Crea una cuenta gratis para seguir hablando con Umber, o vuelve en ${formatWait(retryAfterSeconds)}.`,
+      retryAfterSeconds,
+      'trial_used',
+    );
   }
   const message = `Has llegado al límite de ${RATE_LIMITS[scope].noun} de hoy. Podrás seguir en ${formatWait(retryAfterSeconds)}.`;
-  return anonymous ? `${message} Con la sesión iniciada el límite es más alto.` : message;
+  return new RateLimitError(
+    anonymous ? `${message} Con la sesión iniciada el límite es más alto.` : message,
+    retryAfterSeconds,
+  );
 }
 
 export interface Requester {
@@ -132,6 +160,17 @@ export interface Requester {
   readonly userId: string | null;
   /** IP de la petición. En Vercel la pone su proxy, así que el cliente no puede falsearla. */
   readonly clientAddress: string | null;
+}
+
+/** Cuenta una petición en `key`. Devuelve 0 si cabe; si no, los segundos hasta poder repetir. */
+async function hit(key: string, rules: readonly RateLimitRule[]): Promise<number> {
+  return unwrap(
+    await getSupabaseAdminClient().rpc('hit_rate_limit', {
+      p_key: key,
+      p_window_seconds: rules.map((rule) => rule.windowSeconds),
+      p_limits: rules.map((rule) => rule.limit),
+    }),
+  );
 }
 
 /** Cuenta una petición del ámbito. Lanza `RateLimitError` (429) si no cabe. */
@@ -142,15 +181,16 @@ export async function enforceRateLimit(scope: RateLimitScope, requester: Request
   const rules = anonymous ? limits.anonymous : limits.user;
   const identity = userId === null ? clientKey(requester.clientAddress) : `user:${userId}`;
 
-  const retryAfterSeconds = unwrap(
-    await getSupabaseAdminClient().rpc('hit_rate_limit', {
-      p_key: `${scope}:${identity}`,
-      p_window_seconds: rules.map((rule) => rule.windowSeconds),
-      p_limits: rules.map((rule) => rule.limit),
-    }),
-  );
+  const retryAfterSeconds = await hit(`${scope}:${identity}`, rules);
+  if (retryAfterSeconds > 0) throw limitError(scope, retryAfterSeconds, anonymous);
 
-  if (retryAfterSeconds > 0) {
-    throw new RateLimitError(limitMessage(scope, retryAfterSeconds, anonymous), retryAfterSeconds);
+  // Después, y no a la vez: ver `ScopeLimits.global`.
+  if (limits.global === undefined) return;
+  const globalRetryAfter = await hit(`${scope}:global`, limits.global);
+  if (globalRetryAfter > 0) {
+    throw new RateLimitError(
+      `Umber ha llegado a su límite de ${limits.noun} de hoy. Podrás seguir en ${formatWait(globalRetryAfter)}.`,
+      globalRetryAfter,
+    );
   }
 }

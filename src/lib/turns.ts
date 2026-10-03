@@ -10,9 +10,12 @@
  *  3. Si le piden otra, saca la siguiente de esos candidatos sin volver a
  *     buscar, hasta agotarlos. Cuando se acaban, o si el ánimo cambia, busca de
  *     nuevo.
+ *  4. Si nombran un título concreto, lo comprueba con `buscar_por_titulo` en
+ *     cualquier turno: pedir un título no es un ánimo que haya que entender.
  *
- * El mínimo y el máximo de preguntas los hace cumplir el servidor con
- * `tool_choice`: no depende de que el modelo los recuerde.
+ * El mínimo y el máximo de preguntas los hace cumplir el servidor con las
+ * herramientas que ofrece y `tool_choice`: no depende de que el modelo los
+ * recuerde.
  */
 import { UUID_PATTERN } from '@/lib/api';
 import type { ToolChoice } from '@/lib/deepseek';
@@ -110,13 +113,21 @@ export function conversationState(history: readonly ChatHistoryMessage[]): Conve
   };
 }
 
+export interface TurnTools {
+  /** Si puede buscar por ánimo (`buscar_titulos`). Por título puede siempre. */
+  readonly moodSearch: boolean;
+  readonly choice: ToolChoice;
+}
+
 /**
- * Si Umber puede buscar en este turno. Antes de la primera búsqueda no puede
- * hasta haber preguntado `MIN_QUESTIONS` veces; con `MAX_QUESTIONS` preguntas
- * seguidas, está obligado.
+ * Qué puede hacer Umber en este turno. Antes de la primera búsqueda no puede
+ * buscar por ánimo hasta haber preguntado `MIN_QUESTIONS` veces; con
+ * `MAX_QUESTIONS` preguntas seguidas, está obligado a buscar.
  */
-export function toolChoiceFor(state: ConversationState): ToolChoice {
-  if (state.lastSearch === null && state.pendingQuestions < MIN_QUESTIONS) return 'none';
-  if (state.pendingQuestions >= MAX_QUESTIONS) return 'required';
-  return 'auto';
+export function turnToolsFor(state: ConversationState): TurnTools {
+  if (state.lastSearch === null && state.pendingQuestions < MIN_QUESTIONS) {
+    return { moodSearch: false, choice: 'auto' };
+  }
+  if (state.pendingQuestions >= MAX_QUESTIONS) return { moodSearch: true, choice: 'required' };
+  return { moodSearch: true, choice: 'auto' };
 }

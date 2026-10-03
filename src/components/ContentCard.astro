@@ -9,7 +9,7 @@
  * Dentro de un `<template>`, el `<script>` de abajo sale inerte (Astro lo pinta
  * junto al componente): quien use la plantilla llama él a `initFavoriteButtons()`.
  */
-import { describeCard } from '@/scripts/content-card';
+import { describeCard, similarHref } from '@/scripts/content-card';
 import type { Recommendation } from '@/lib/types';
 
 interface Props {
@@ -83,7 +83,7 @@ const loginHref = `/entrar?next=${encodeURIComponent(Astro.url.pathname + Astro.
       </p>
     </div>
 
-    <div class="mt-auto pt-2">
+    <div class="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 pt-2">
       {
         signedIn ? (
           <button
@@ -107,7 +107,17 @@ const loginHref = `/entrar?next=${encodeURIComponent(Astro.url.pathname + Astro.
           </a>
         )
       }
-      <p data-field="favorite-status" role="status" hidden class="text-umber-amber mt-1 text-xs"></p>
+      {/* En otra pestaña: sin sesión, la conversación solo vive en esta. */}
+      <a
+        data-field="similar-link"
+        href={item === undefined ? undefined : similarHref(item.id)}
+        target="_blank"
+        rel="noopener"
+        class="text-umber-ash hover:text-umber-cream text-sm underline underline-offset-4"
+      >
+        Más como esta<span class="sr-only"> (se abre en otra pestaña)</span>
+      </a>
+      <p data-field="favorite-status" role="status" hidden class="text-umber-amber w-full text-xs"></p>
     </div>
   </div>
 </article>

@@ -13,7 +13,7 @@ const FOREIGN_KEY_VIOLATION = '23503';
 
 export async function listFavoriteIds(client: UmberSupabaseClient): Promise<string[]> {
   const rows = unwrap(await client.from('users_favorites').select('content_id'));
-  return rows.flatMap((row) => (row.content_id === null ? [] : [row.content_id]));
+  return rows.map((row) => row.content_id);
 }
 
 export interface FavoriteContent {

@@ -104,6 +104,35 @@ export async function listExplore(filters: ExploreFilters): Promise<ExplorePage>
   return { items, total: rows[0]?.total_count ?? 0 };
 }
 
+// ─── Más como esta ───────────────────────────────────────────────────────────
+
+export interface SimilarTitle {
+  readonly id: string;
+  readonly type: ContentType;
+  readonly title: string;
+  readonly year: number | null;
+  readonly poster_path: string | null;
+}
+
+/**
+ * Los parecidos de un título, en su orden. Los calcula el seed (`load-db.py`,
+ * tabla `content_similar`) por lo que cuenta cada título y no por su nombre: aquí
+ * solo se leen, sin búsqueda vectorial ni llamadas a ningún modelo.
+ */
+export async function listSimilar(id: string): Promise<SimilarTitle[]> {
+  const rows = unwrap(
+    await getSupabaseClient()
+      .from('content_similar')
+      .select('similar:similar_id (id, type, title, year, poster_path)')
+      .eq('content_id', id)
+      .order('rank'),
+  );
+  // `type` sale como string del generador; el CHECK de la tabla garantiza el valor.
+  return rows.flatMap(({ similar }): SimilarTitle[] =>
+    similar.type === 'movie' || similar.type === 'tv' ? [{ ...similar, type: similar.type }] : [],
+  );
+}
+
 // ─── Ficha ───────────────────────────────────────────────────────────────────
 
 export interface ExploreTitle {

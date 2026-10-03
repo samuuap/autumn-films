@@ -105,6 +105,42 @@ export type Database = {
         }
         Relationships: []
       }
+      content_similar: {
+        Row: {
+          content_id: string
+          rank: number
+          similar_id: string
+          similarity: number
+        }
+        Insert: {
+          content_id: string
+          rank: number
+          similar_id: string
+          similarity: number
+        }
+        Update: {
+          content_id?: string
+          rank?: number
+          similar_id?: string
+          similarity?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_similar_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_similar_similar_id_fkey"
+            columns: ["similar_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       conversations: {
         Row: {
           created_at: string
@@ -112,7 +148,7 @@ export type Database = {
           messages: Json
           mode: string
           updated_at: string
-          user_id: string | null
+          user_id: string
         }
         Insert: {
           created_at?: string
@@ -120,7 +156,7 @@ export type Database = {
           messages?: Json
           mode: string
           updated_at?: string
-          user_id?: string | null
+          user_id: string
         }
         Update: {
           created_at?: string
@@ -128,7 +164,7 @@ export type Database = {
           messages?: Json
           mode?: string
           updated_at?: string
-          user_id?: string | null
+          user_id?: string
         }
         Relationships: []
       }
@@ -202,22 +238,22 @@ export type Database = {
       }
       users_favorites: {
         Row: {
-          content_id: string | null
+          content_id: string
           created_at: string
           id: string
-          user_id: string | null
+          user_id: string
         }
         Insert: {
-          content_id?: string | null
+          content_id: string
           created_at?: string
           id?: string
-          user_id?: string | null
+          user_id: string
         }
         Update: {
-          content_id?: string | null
+          content_id?: string
           created_at?: string
           id?: string
-          user_id?: string | null
+          user_id?: string
         }
         Relationships: [
           {

@@ -23,6 +23,7 @@ import { publicError, readClientAddress, readJson } from '@/lib/api';
 import { getRequestUser, type RequestUser } from '@/lib/auth';
 import {
   SEARCH_TOOL,
+  TITLE_SEARCH_TOOL,
   buildChatMessages,
   buildSearchQuery,
   enrichCandidates,
@@ -30,9 +31,11 @@ import {
   extractTitleMentions,
   findRecommendations,
   formatSearchResult,
+  formatTitleResult,
   isAlreadyRecommended,
   parseChatRequest,
   parseSearchSummary,
+  parseTitleQuery,
   replyLanguage,
   type ChatRequest,
   type EnrichedCandidate,
@@ -49,13 +52,22 @@ import {
   type ToolCall,
   type TurnEvent,
 } from '@/lib/deepseek';
-import { AuthError, DeepSeekError, ValidationError } from '@/lib/errors';
+import { AuthError, ConversationFullError, DeepSeekError, ValidationError } from '@/lib/errors';
 import { readPlatformsCache } from '@/lib/platforms';
 import { enforceRateLimit } from '@/lib/rate-limit';
-import { loadCandidates, searchCandidates, toCandidateRefs } from '@/lib/search';
-import { conversationState, toolChoiceFor } from '@/lib/turns';
+import {
+  DEFAULT_CANDIDATE_COUNT,
+  loadCandidates,
+  searchCandidates,
+  searchTitles,
+  toCandidateRefs,
+  type RankedCandidate,
+} from '@/lib/search';
+import { MAX_SUMMARY_CHARS, conversationState, turnToolsFor } from '@/lib/turns';
 import {
   CHAT_MODE_DEFINITIONS,
+  MAX_CONVERSATION_MESSAGES,
+  type ContentCandidate,
   type ChatHistoryMessage,
   type ChatStreamEvent,
   type Locale,
@@ -175,6 +187,14 @@ async function prepareChat(context: APIContext, signal: AbortSignal): Promise<Pr
 
   // Con conversación guardada manda Supabase; sin ella, lo que el cliente tiene en memoria.
   const history = conversation?.messages ?? chat.history;
+  // El turno añade dos mensajes: el de la persona y la respuesta.
+  if (history.length + 2 > MAX_CONVERSATION_MESSAGES) {
+    throw new ConversationFullError(
+      user === null
+        ? 'Aquí termina la conversación de prueba. Crea una cuenta gratis para seguir hablando con Umber.'
+        : 'Esta conversación ha llegado a su final. Empieza una nueva para seguir hablando con Umber.',
+    );
+  }
   const state = conversationState(history);
   const recommended = extractRecommended(history);
   const language = replyLanguage(chat.message, history, chat.locale);
@@ -187,6 +207,7 @@ async function prepareChat(context: APIContext, signal: AbortSignal): Promise<Pr
   );
   const remaining = await enrichCandidates(await loadCandidates(state.remaining), chat.region, signal, cache);
   const outcome: TurnOutcome = { candidates: remaining.candidates, search: null };
+  const tools = turnToolsFor(state);
   const base: ChatRequestOptions = {
     messages: buildChatMessages({
       request: chat,
@@ -196,31 +217,52 @@ async function prepareChat(context: APIContext, signal: AbortSignal): Promise<Pr
       recommended,
       language,
     }),
-    tools: [SEARCH_TOOL],
+    tools: tools.moodSearch ? [SEARCH_TOOL, TITLE_SEARCH_TOOL] : [TITLE_SEARCH_TOOL],
     signal,
+  };
+  const searchOptions = {
+    contentType: CHAT_MODE_DEFINITIONS[chat.mode].contentType,
+    exclude: (candidate: ContentCandidate) =>
+      state.recommendedIds.has(candidate.id) || isAlreadyRecommended(candidate, recommended),
   };
 
   /**
-   * Avisa de que busca, ejecuta `buscar_titulos` y escribe la recomendación con
+   * Avisa de que busca, ejecuta la herramienta y escribe la recomendación con
    * una segunda llamada. Embedding, base y TMDB tardan varios segundos.
    */
   async function* runSearch(call: ToolCall): AsyncGenerator<ReplyPart> {
     yield { type: 'searching' };
-    const { summary } = parseSearchSummary(call.arguments, buildSearchQuery(history, chat.message));
-    const found = await searchCandidates(summary, {
-      contentType: CHAT_MODE_DEFINITIONS[chat.mode].contentType,
-      exclude: (candidate) =>
-        state.recommendedIds.has(candidate.id) || isAlreadyRecommended(candidate, recommended),
-    });
+    let found: RankedCandidate[];
+    /** Lo que se recuerda de la búsqueda, o `null` si no cuenta como tal. */
+    let summary: string | null;
+    let describe: (candidates: readonly EnrichedCandidate[]) => string;
+
+    if (call.name === TITLE_SEARCH_TOOL.name) {
+      const titles = parseTitleQuery(call.arguments, chat.message);
+      const { exact, similar } = await searchTitles(titles, searchOptions);
+      const exactCount = Math.min(exact.length, DEFAULT_CANDIDATE_COUNT);
+      found = exactCount === 0 ? [] : [...exact, ...similar].slice(0, DEFAULT_CANDIDATE_COUNT);
+      // Un título que no está no es una búsqueda: no le ahorra preguntas.
+      summary = exactCount === 0 ? null : `Título: ${titles.join(' / ')}`.slice(0, MAX_SUMMARY_CHARS);
+      describe = (candidates) =>
+        formatTitleResult(candidates.slice(0, exactCount), candidates.slice(exactCount), chat.region, language);
+    } else {
+      summary = parseSearchSummary(call.arguments, buildSearchQuery(history, chat.message)).summary;
+      found = await searchCandidates(summary, searchOptions);
+      describe = (candidates) => formatSearchResult(candidates, chat.region, language);
+    }
+
     const enriched = await enrichCandidates(found, chat.region, signal);
-    outcome.candidates = enriched.candidates;
-    outcome.search = { summary, candidates: toCandidateRefs(found) };
+    if (summary !== null) {
+      outcome.candidates = enriched.candidates;
+      outcome.search = { summary, candidates: toCandidateRefs(found) };
+    }
     // La caché de plataformas se escribe mientras DeepSeek abre el stream: no retrasa nada.
     const [stream] = await Promise.all([
       streamChat({
         ...base,
         toolChoice: 'none',
-        toolRound: { call, result: formatSearchResult(enriched.candidates, chat.region, language) },
+        toolRound: { call, result: describe(enriched.candidates) },
       }),
       enriched.saved,
     ]);
@@ -228,7 +270,7 @@ async function prepareChat(context: APIContext, signal: AbortSignal): Promise<Pr
   }
 
   const [stream] = await Promise.all([
-    streamChat({ ...base, toolChoice: toolChoiceFor(state) }),
+    streamChat({ ...base, toolChoice: tools.choice }),
     remaining.saved,
   ]);
   // Lo primero que hace se mira antes de responder: un stream vacío de DeepSeek

@@ -17,7 +17,7 @@ import {
 import type { ToolDefinition } from '@/lib/deepseek';
 import { lookupPlatforms, type PlatformsCache } from '@/lib/platforms';
 import { SYSTEM_PROMPT, renderUserContext } from '@/lib/prompts';
-import type { RankedCandidate } from '@/lib/search';
+import { normalizeTitle, type RankedCandidate } from '@/lib/search';
 import { posterUrl, TMDB_DEFAULT_REGION } from '@/lib/tmdb';
 import {
   MAX_QUESTIONS,
@@ -29,8 +29,9 @@ import {
 import {
   CHAT_MODE_DEFINITIONS,
   DEFAULT_LOCALE,
-  MAX_HISTORY_MESSAGES,
+  MAX_CONVERSATION_MESSAGES,
   MAX_MESSAGE_CHARS,
+  remainingTurns,
   isChatMode,
   isLocale,
   type ChatHistoryMessage,
@@ -71,9 +72,10 @@ function parseHistory(value: unknown): ChatHistoryMessage[] {
   if (!Array.isArray(value)) {
     throw new ValidationError('El historial tiene que ser una lista de mensajes.');
   }
-  if (value.length > MAX_HISTORY_MESSAGES) {
+  // Uno lleno se rechaza después, con su propio error: ver `prepareChat`.
+  if (value.length > MAX_CONVERSATION_MESSAGES) {
     throw new ValidationError(
-      `El historial tiene ${String(value.length)} mensajes; el máximo es ${String(MAX_HISTORY_MESSAGES)}.`,
+      `El historial tiene ${String(value.length)} mensajes; el máximo es ${String(MAX_CONVERSATION_MESSAGES)}.`,
     );
   }
   return value.map((item: unknown) => {
@@ -134,16 +136,6 @@ export function parseChatRequest(body: unknown, acceptLanguage: string | null): 
 }
 
 // ─── Títulos mencionados ─────────────────────────────────────────────────────
-
-/** Minúsculas, sin tildes ni puntuación: «¡Olvídate de mí!» y «olvidate de mi» son iguales. */
-function normalizeTitle(title: string): string {
-  return title
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
-}
 
 export interface TitleMention {
   readonly title: string;
@@ -227,7 +219,7 @@ export function buildSearchQuery(history: readonly ChatMessage[], message: strin
 export const SEARCH_TOOL: ToolDefinition = {
   name: 'buscar_titulos',
   description:
-    'Busca en el catálogo títulos que encajen con el ánimo de la persona. Llámala cuando ya lo tengas claro, o cuando necesites títulos nuevos porque su ánimo ha cambiado o ya no te quedan candidatos.',
+    'Busca en el catálogo títulos que encajen con el ánimo de la persona. Llámala cuando ya lo tengas claro, o cuando necesites títulos nuevos porque su ánimo ha cambiado o ya no te quedan candidatos. Para un título concreto que nombre la persona, usa buscar_por_titulo.',
   parameters: {
     type: 'object',
     properties: {
@@ -240,6 +232,53 @@ export const SEARCH_TOOL: ToolDefinition = {
     required: ['resumen'],
   },
 };
+
+/**
+ * La herramienta con la que comprueba un título concreto. Está en todos los
+ * turnos, también antes de poder buscar por ánimo: a «¿tienes El padrino?» no
+ * hay que hacerle preguntas, y sin ella respondía que no lo tenía sin mirar.
+ */
+export const TITLE_SEARCH_TOOL: ToolDefinition = {
+  name: 'buscar_por_titulo',
+  description:
+    'Comprueba si un título concreto está en el catálogo, en qué plataformas se puede ver, y trae otros parecidos. Llámala en cuanto la persona nombre un título: si lo pide, si pregunta si lo tienes, dónde verlo (o descargarlo) o si quiere algo parecido a él. Puedes usarla en cualquier momento de la conversación. Nunca la uses para buscar por ánimo.',
+  parameters: {
+    type: 'object',
+    properties: {
+      titulo: {
+        type: 'string',
+        description:
+          'El título tal como lo nombra la persona y, si lo conoces, también su título en inglés, separados por « / ». Por ejemplo: «Cadena perpetua / The Shawshank Redemption».',
+      },
+    },
+    required: ['titulo'],
+  },
+};
+
+/** Títulos que se piden de una vez, como mucho: «Cadena perpetua / The Shawshank Redemption». */
+const MAX_TITLE_VARIANTS = 4;
+
+/**
+ * Los títulos que pidió el modelo al llamar a `buscar_por_titulo`. Si no se
+ * pueden leer, se busca con el mensaje de la persona tal cual.
+ */
+export function parseTitleQuery(args: string, fallback: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(args);
+    const raw = isRecord(parsed) && typeof parsed['titulo'] === 'string' ? parsed['titulo'] : '';
+    const titles = raw
+      .split('/')
+      .map((title) => title.trim())
+      .filter((title) => title.length > 0 && title.length <= MAX_SUMMARY_CHARS)
+      // «The Godfather / The Godfather»: cuando el título ya es el inglés, lo repite.
+      .filter((title, index, all) => all.findIndex((other) => normalizeTitle(other) === normalizeTitle(title)) === index)
+      .slice(0, MAX_TITLE_VARIANTS);
+    if (titles.length > 0) return titles;
+  } catch {
+    // JSON roto: vale el respaldo.
+  }
+  return [fallback.slice(0, MAX_SUMMARY_CHARS)];
+}
 
 /**
  * El resumen que escribió el modelo al llamar a `buscar_titulos`. Si no se
@@ -397,12 +436,13 @@ export interface ChatContext {
  */
 function describeState(state: ConversationState): string {
   const questions = `Llevas ${String(state.pendingQuestions)} de ${String(MAX_QUESTIONS)} preguntas seguidas.`;
+  const titleOnly = 'Si nombra un título concreto, compruébalo con buscar_por_titulo.';
   if (state.lastSearch === null) {
     if (state.pendingQuestions === 0) {
-      return 'Aún no has buscado ni preguntado nada. En este turno no puedes buscar: haz tu primera pregunta para entender su ánimo.';
+      return `Aún no has buscado ni preguntado nada. En este turno no puedes buscar por ánimo: haz tu primera pregunta para entenderlo. ${titleOnly}`;
     }
     if (state.pendingQuestions < MIN_QUESTIONS) {
-      return `Aún no has buscado. ${questions} En este turno no puedes buscar: haz otra pregunta sobre algo que aún no sepas de lo que le apetece.`;
+      return `Aún no has buscado. ${questions} En este turno no puedes buscar por ánimo: haz otra pregunta sobre algo que aún no sepas de lo que le apetece. ${titleOnly}`;
     }
     if (state.pendingQuestions >= MAX_QUESTIONS) {
       return `Aún no has buscado. ${questions} Ya no puedes preguntar más: busca ahora con buscar_titulos, con lo que sabes.`;
@@ -417,6 +457,21 @@ function describeState(state: ConversationState): string {
     return `${last} Ya has recomendado todos sus candidatos: si quiere otra, o si su ánimo ha cambiado, busca de nuevo con buscar_titulos.`;
   }
   return `${last} Te quedan ${String(state.remaining.length)} candidatos de ella (abajo). Si pide otra, elige una de ellos sin buscar. Si su ánimo ha cambiado, busca de nuevo con buscar_titulos.`;
+}
+
+/**
+ * Lo cerca que está el final de la conversación (`MAX_CONVERSATION_MESSAGES`),
+ * para que cierre recomendando y no la deje a medias con una pregunta.
+ */
+function describeEnding(historyLength: number): string | null {
+  const after = remainingTurns(historyLength + 2);
+  if (after === 0) {
+    return 'Este es tu último mensaje en esta conversación: no hagas preguntas. Si ya le has recomendado algo, despídete con calidez; si no, recomiéndale uno ahora.';
+  }
+  if (after <= 2) {
+    return `A esta conversación solo le quedan ${String(after)} mensajes tuyos después de este: ve cerrando, sin abrir temas nuevos.`;
+  }
+  return null;
 }
 
 function formatCandidates(
@@ -450,6 +505,41 @@ export function formatSearchResult(
 }
 
 /**
+ * Lo que devuelve `buscar_por_titulo` al modelo: si está lo que ha pedido, y
+ * los parecidos para «otra» o para «algo como esta».
+ */
+export function formatTitleResult(
+  exact: readonly EnrichedCandidate[],
+  similar: readonly EnrichedCandidate[],
+  region: string,
+  language: Locale,
+): string {
+  if (exact.length === 0) {
+    return 'Ese título no está en el catálogo. Díselo con naturalidad, sin nombrar ningún otro título, y sigue la conversación: si aún no sabes qué le apetece, pregúntale.';
+  }
+  const lines = [
+    'Está en el catálogo. Lo que ha pedido:',
+    '',
+    formatCandidates(exact, region, language),
+  ];
+  if (similar.length > 0) {
+    lines.push(
+      '',
+      'Otros parecidos, por si quiere algo como esa o pide otra. Junto con lo de arriba, son los únicos que puedes recomendar ahora:',
+      '',
+      similar
+        .map((candidate, index) => formatCandidate(candidate, exact.length + index, region, language))
+        .join('\n'),
+    );
+  }
+  lines.push(
+    '',
+    `Si lo ha pedido, recomiéndaselo; si quería algo parecido, elige uno de los parecidos. Uno solo, en ${LANGUAGE_NAMES[language]}, con el título tal como viene arriba.`,
+  );
+  return lines.join('\n');
+}
+
+/**
  * Los últimos turnos, empezando siempre por un mensaje del usuario. Al modelo
  * solo le llegan rol y texto: los mensajes guardados llevan además fecha, ids y
  * idioma.
@@ -472,7 +562,9 @@ export function buildChatMessages(context: ChatContext): ChatMessage[] {
     region: request.region,
     today: new Date().toISOString().slice(0, 10),
     user_message: quote(request.message),
-    conversation_state: describeState(state),
+    conversation_state: [describeState(state), describeEnding(context.history.length)]
+      .filter((part) => part !== null)
+      .join(' '),
     candidates:
       state.lastSearch === null
         ? '(aún no has buscado)'
