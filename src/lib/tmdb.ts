@@ -174,13 +174,6 @@ export async function getDetails(
 
 // ─── Plataformas ─────────────────────────────────────────────────────────────
 
-export function getWatchProviders(
-  details: TmdbDetails,
-  region: string = TMDB_DEFAULT_REGION,
-): TmdbWatchProviderRegion | null {
-  return details['watch/providers']?.results[region] ?? null;
-}
-
 /**
  * La misma plataforma revendida a través de otra tienda. TMDB la lista como
  * proveedor aparte: «HBO Max» y «HBO Max Amazon Channel» son lo mismo.
@@ -202,14 +195,6 @@ function cleanProviderName(name: string): string {
  * subservicios que son variantes de otro ya listado («Movistar Plus+ Ficción
  * Total» cuando ya está «Movistar Plus+»).
  */
-export function getStreamingNames(
-  details: TmdbDetails,
-  region: string = TMDB_DEFAULT_REGION,
-): string[] {
-  const providers = getWatchProviders(details, region);
-  return providers === null ? [] : streamingNames(providers);
-}
-
 function streamingNames(providers: TmdbWatchProviderRegion): string[] {
   const relevant = [...(providers.flatrate ?? []), ...(providers.free ?? [])];
 
@@ -236,7 +221,7 @@ function streamingNames(providers: TmdbWatchProviderRegion): string[] {
 }
 
 /**
- * Región (ISO 3166-1, «ES») → lo que devuelve `getStreamingNames`. Las regiones
+ * Región (ISO 3166-1, «ES») → lo que devuelve `streamingNames`. Las regiones
  * sin ninguna plataforma de suscripción ni gratis no aparecen, igual que en TMDB.
  */
 export type PlatformsByRegion = Record<string, string[]>;

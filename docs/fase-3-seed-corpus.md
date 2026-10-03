@@ -2,7 +2,7 @@
 
 **Estado:** ✅ Completada
 **Depende de:** [Fase 2](fase-2-base-de-datos.md) ✅
-**Actualizado:** 2026-09-29
+**Actualizado:** 2026-09-30 (corpus repuntuado: ver «Repuntuación»)
 
 ## Objetivo
 
@@ -33,7 +33,9 @@ al reejecutarlo, no repite llamadas.
       no pasa de 500 páginas) y trae el detalle de cada uno en **una** llamada con
       `keywords`, `credits` y `translations`. Guarda el detalle recortado: los
       créditos completos pesan ~75 KB por película
-- [x] `score.py`: heurística de prefiltro + deepseek-flash por lotes de 25
+- [x] `score.py`: deepseek-flash por lotes de 25, en 3 pasadas sobre todo el
+      universo, y media. Hasta el 2026-09-30, una heurística de prefiltro decidía
+      qué títulos llegaban al modelo (ver «Repuntuación»)
 - [x] `embed.py`: vectoriza sin instrucción, comprueba 1024 dimensiones y valores
       finitos, y guarda cada vector con el hash del texto del que sale
 - [x] `load-db.py`: upsert por `(tmdb_id, type)` en lotes de 100 con la secret
@@ -58,6 +60,54 @@ Reparto de `autumn_score` en películas: 45 en 90–99, 258 en 80–89, 742 en 7
 «encaja razonablemente con el otoño», que es lo que da de sí pedir 4.500
 películas.
 
+### Repuntuación (2026-09-30)
+
+El corpus se inclinaba hacia Halloween y el terror: **el 30 % era terror**
+(1.523 de 5.000), y el 25 %, terror sin Halloween ni otoño (*La mujer de negro*,
+*Nosferatu*, *Vampyr* en 85–88). Criterio de producto: centrarse en lo que es
+**sí o sí de ver en otoño** (*El club de los poetas muertos*, *Las chicas
+Gilmore*, *Harry Potter*). El terror vale cuando la propia película va de
+Halloween, y el que solo tiene ambiente oscuro puede entrar, pero abajo.
+
+- [x] Prompt nuevo en `score.py`: la temporada por encima del género. Halloween
+      y el Día de Muertos cuentan solo si la historia va de ellos o pasa en ellos
+      (85–100). El terror con ambiente otoñal puntúa por ese ambiente, y el que no
+      tiene ni Halloween ni otoño, 40 como mucho
+- [x] **Sin prefiltro heurístico**: se puntúa el universo entero (16.996)
+- [x] **3 pasadas** con lotes barajados con otra semilla en cada una, y media.
+      Resuelve la pregunta 1
+- [x] Calibrado antes con 81 títulos de referencia en una pasada, sin tocar la
+      caché
+- [x] Vectorizados los 1.613 títulos nuevos y cargado con `--prune`. No había
+      favoritos que perder: la base no tenía usuarios
+
+| Paso | Resultado |
+|---|---|
+| Puntuación | 3 × 680 lotes, ninguno fallido, unos 10 minutos. 1,29 USD en total, contando la calibración y unas 20 llamadas de chat de prueba |
+| Selección | 4.500 películas (corte en 38,3) y 500 series (corte en 45) |
+| Cambios | Entran 1.613 y salen 1.613. Salen *El resplandor*, *Oppenheimer*, *1917*, *Juego macabro*, *Breaking Bad*; entran *Tienes un e-mail* (90,7), *Almas en pena de Inisherin*, *Community*, *El internado* |
+| Terror | Del 30 % al 14 % del corpus; sin Halloween ni otoño, del 25 % al 9 % |
+| Pasadas que difieren en 20 o más | 183 películas y 21 series del corpus. Las que más: *Scooby-Doo! Miedo en el campamento* [85, 30, 55] |
+
+Reparto en películas: 91 en 90–99, 189 en 80–89, 116 en 70–79, 264 en 60–69,
+1.037 en 50–59, 2.677 en 40–49 y 126 en 30–39. El criterio nuevo es más
+estricto, y el universo no tiene 4.500 películas claramente otoñales: 1.697
+tienen 50 o más y 4.374, 40 o más. Se mantuvo el tamaño (decisión de producto,
+ver Decisiones).
+
+Cómo queda el terror, en la media de las tres pasadas: *La noche de Halloween* y
+*Trick 'r Treat* 95, *El proyecto de la bruja de Blair* 88 (un bosque en
+octubre), *La bruja* 55, *Hereditary*, *Expediente Warren* y *Babadook* 40
+(dentro, abajo), *Midsommar* 16,7, *Viernes 13* 23,3 y *Tiburón* 10 (fuera).
+Quedan fallos sueltos que la media no corrige del todo: *It* (2017), que
+transcurre en verano, se queda en 66,7 [55, 60, 85]; *E.T.* baja a 45 aunque su
+Halloween es central.
+
+Búsquedas de control tras la carga: *brujas o fantasmas* → *El gabinete de
+curiosidades de Guillermo del Toro*, *Penny Dreadful*; *nostalgia universitaria*
+→ *Amor y letras*, *Diez años después*; *algo acogedor, con mantita y té* →
+*Como agua para chocolate*, *Ratatouille*, *Ted Lasso*.
+
 ### Cierre
 
 - [x] Búsquedas de control con tres estados de ánimo, sin filtro de tipo:
@@ -80,7 +130,11 @@ películas.
 | Decisión | Motivo |
 |---|---|
 | El texto canónico que se vectoriza se construye en Python, no en TypeScript | Evita tener la misma lógica en dos lenguajes. El lado TypeScript solo vectoriza consultas, nunca documentos |
-| **`autumn_score` mixto**: heurística para descartar y deepseek-flash (0–100, temperatura 0.1) para puntuar | La heurística sola no distingue una comedia de pueblo en octubre de una de verano; el LLM solo, sobre 17.000 títulos, gasta llamadas en blockbusters obvios. La heurística se comprobó: de todo lo que descartó, solo 3 títulos tenían keywords estacionales (The Dark Knight, 9, Swamp Thing) |
+| ~~**`autumn_score` mixto**: heurística para descartar y deepseek-flash (0–100, temperatura 0.1) para puntuar~~ Sustituida el 2026-09-30: ver las tres filas siguientes | La heurística sola no distingue una comedia de pueblo en octubre de una de verano; el LLM solo, sobre 17.000 títulos, gasta llamadas en blockbusters obvios. La heurística se comprobó: de todo lo que descartó, solo 3 títulos tenían keywords estacionales (The Dark Knight, 9, Swamp Thing) |
+| **Sin prefiltro: deepseek-flash puntúa todo el universo** | La heurística daba +2 al terror y al misterio y 0 a la comedia: descartaba justo lo que el criterio nuevo quiere. *Tienes un e-mail* quedaba en el puesto 10.136 de 14.996 y no llegaba al modelo; *Cuando Harry encontró a Sally* (6.011) y *El indomable Will Hunting* (7.111) pasaban por poco. Puntuarlo todo cuesta unos 0,40 USD por pasada |
+| **Otoño antes que Halloween**: el prompt puntúa la temporada, no el género | Decisión de producto. Halloween y el Día de Muertos cuentan solo si la historia va de ellos; el terror con ambiente otoñal, por ese ambiente; el resto del terror, 40 como mucho. Calibrado con 81 títulos: *Cuando Harry encontró a Sally* 48 → 90, *Nosferatu* 88 → 35, *La noche de Halloween* se queda en 95 |
+| **Tres pasadas y media**, con lotes de composición distinta. Resuelve la pregunta 1 | La misma película cambiaba hasta 40 puntos según el lote en que caía, justo en la franja del corte. Cada pasada baraja con otra semilla, así que reejecutar sigue dando el mismo corpus. En 183 películas del corpus las pasadas difieren en 20 o más: la media es la que decide |
+| **Se mantienen 4.500 películas y 500 series** con el criterio nuevo, aunque el corte baje a 38,3 | Decisión de producto: con corte en 45 quedarían unas 2.700 y con 50, unas 1.700. El terror sin Halloween entra, pero abajo (*Hereditary* 40), y el de verano se queda fuera (*Midsommar* 16,7). Lo otoñal se prioriza al reordenar en el chat, con peso 0,2 (Fase 4) |
 | **`autumn_score` filtra y ordena** | Entran al corpus los 5.000 mejor puntuados, así que Umber solo conoce títulos otoñales. En la Fase 4 se combina con la similitud para reordenar |
 | **Reparto 90/10**: 4.500 películas y 500 series | Decisión de producto. TMDB tiene muchas menos series con votos suficientes |
 | **Vectorizar en inglés**, con la sinopsis española solo si falta la inglesa | TMDB solo tiene keywords en inglés, sus sinopsis inglesas son más completas (faltan 2 en inglés frente a 369 en español) y es donde mejor rinde el modelo. Las búsquedas de control confirman que la recuperación cruzada funciona |
@@ -101,8 +155,9 @@ películas.
 
 ## Preguntas abiertas
 
-**1. La puntuación del LLM varía según el lote.**
-El mismo título puntuado en dos lotes distintos:
+**1. ~~La puntuación del LLM varía según el lote.~~**
+Resuelta el 2026-09-30: tres pasadas con lotes distintos y media (ver
+Decisiones). Lo que la motivó, el mismo título puntuado en dos lotes distintos:
 
 | Título | Prueba | Pasada completa |
 |---|---|---|
@@ -117,7 +172,8 @@ En los extremos es estable; en la franja media hay ruido de ±10 a ±40, justo
 donde está el corte (48). La caché hace el resultado reproducible, pero no más
 preciso. La salida natural es puntuar cada título dos o tres veces en lotes de
 composición distinta y promediar: céntimos y unos 2 minutos por pasada. Merece
-la pena antes de que el reordenado de la Fase 4 dependa de este número.
+la pena antes de que el reordenado de la Fase 4 dependa de este número. (Al
+final, sobre todo el universo: unos 0,40 USD y 3 minutos por pasada.)
 
 **2. ~~La instrucción de la consulta arrastra hacia títulos con «otoño».~~**
 Resuelta en la Fase 4: la instrucción ya no dice «autumnal». De 14 títulos

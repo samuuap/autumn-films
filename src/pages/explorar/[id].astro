@@ -1,0 +1,177 @@
+---
+/**
+ * Ficha de un título del corpus: fondo, cartel, sinopsis, plataformas y
+ * favorito. Llega desde `/explorar` con sus filtros en la URL, y «Explorar» vuelve
+ * a ellos. Las plataformas se piden en el servidor, como en favoritos.
+ */
+import Layout from '@/layouts/Layout.astro';
+import { EXPLORE_PATH, exploreSearch, loadExploreTitle, parseExploreFilters } from '@/lib/explore';
+import { listFavoriteIds } from '@/lib/favorites';
+import { regionFromAcceptLanguage } from '@/lib/locale';
+import { lookupPlatforms } from '@/lib/platforms';
+import { TMDB_DEFAULT_REGION, backdropUrl, posterUrl } from '@/lib/tmdb';
+import { CHAT_MODE_DEFINITIONS } from '@/lib/types';
+
+const item = await loadExploreTitle(Astro.params.id ?? '');
+if (item === null) return Astro.redirect(EXPLORE_PATH);
+
+const { user, supabase } = Astro.locals;
+const region =
+  regionFromAcceptLanguage(Astro.request.headers.get('accept-language')) ?? TMDB_DEFAULT_REGION;
+const [{ platforms, saved }, favoriteIds] = await Promise.all([
+  lookupPlatforms([item], region),
+  user === null ? Promise.resolve([]) : listFavoriteIds(supabase),
+]);
+// Esperarla aquí: en Vercel, lo que sigue en marcha tras responder puede no terminar.
+await saved;
+const itemPlatforms = platforms[0] ?? null;
+const favorite = favoriteIds.includes(item.id);
+
+const backHref = `${EXPLORE_PATH}${exploreSearch(parseExploreFilters(Astro.url.searchParams))}`;
+const loginHref = `/entrar?next=${encodeURIComponent(Astro.url.pathname + Astro.url.search)}`;
+const kind = CHAT_MODE_DEFINITIONS[item.type].label;
+const poster = posterUrl(item.poster_path);
+const backdrop = item.backdrop_path;
+
+function formatRuntime(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${String(rest)} min`;
+  return rest === 0 ? `${String(hours)} h` : `${String(hours)} h ${String(rest)} min`;
+}
+
+const facts = [
+  item.year === null ? null : String(item.year),
+  item.type === 'movie' && item.runtime !== null && item.runtime > 0 ? formatRuntime(item.runtime) : null,
+  item.type === 'tv' && item.seasons !== null
+    ? `${String(item.seasons)} ${item.seasons === 1 ? 'temporada' : 'temporadas'}`
+    : null,
+  item.type === 'tv' && item.status === 'ongoing' ? 'En emisión' : null,
+  item.type === 'tv' && item.status === 'ended' ? 'Terminada' : null,
+].filter((fact) => fact !== null);
+const credit = item.director === null ? null : `${item.type === 'movie' ? 'Dirección' : 'Creación'}: ${item.director}`;
+const otherTitle = item.title_en !== null && item.title_en !== item.title ? item.title_en : null;
+---
+
+<Layout title={`${item.title} — Umber`}>
+  <main class="flex-1">
+    <section class="relative isolate overflow-hidden">
+      {
+        backdrop !== null && (
+          <img
+            src={backdropUrl(backdrop, 'w1280')}
+            srcset={`${backdropUrl(backdrop, 'w780')} 780w, ${backdropUrl(backdrop, 'w1280')} 1280w`}
+            sizes="100vw"
+            alt=""
+            fetchpriority="high"
+            class="absolute inset-0 -z-10 h-full max-h-[34rem] w-full object-cover opacity-30"
+          />
+        )
+      }
+      <div
+        class="from-umber-base via-umber-base/85 to-umber-base/30 absolute inset-0 -z-10 max-h-[34rem] bg-gradient-to-t"
+        aria-hidden="true"
+      >
+      </div>
+
+      <div class="mx-auto max-w-5xl px-5 pt-6 pb-16">
+        <a href={backHref} class="text-umber-ash hover:text-umber-cream text-sm transition-colors">
+          ← Explorar
+        </a>
+
+        <div class="mt-8 flex flex-col gap-8 sm:flex-row sm:items-start">
+          <div class="bg-umber-surface aspect-[2/3] w-44 shrink-0 overflow-hidden rounded-lg shadow-2xl shadow-black/60 sm:w-60">
+            {
+              poster === null ? (
+                <div class="text-umber-ash flex h-full items-center justify-center text-sm">Sin cartel</div>
+              ) : (
+                <img src={poster} alt={`Cartel de ${item.title}`} width="500" height="750" class="h-full w-full object-cover" />
+              )
+            }
+          </div>
+
+          <div class="min-w-0 max-w-2xl space-y-5">
+            <div class="space-y-2">
+              <p class="text-umber-amber text-xs font-medium tracking-[0.2em] uppercase">{kind}</p>
+              <h1 class="text-4xl leading-tight font-semibold">{item.title}</h1>
+              {otherTitle !== null && <p class="text-umber-ash italic">{otherTitle}</p>}
+              {facts.length > 0 && <p class="text-umber-cream/80 text-sm">{facts.join(' · ')}</p>}
+              {credit !== null && <p class="text-umber-ash text-sm">{credit}</p>}
+            </div>
+
+            {
+              item.genres.length > 0 && (
+                <ul class="flex flex-wrap gap-1.5">
+                  {item.genres.map((genre) => (
+                    <li>
+                      <a
+                        href={`${EXPLORE_PATH}${exploreSearch({ type: item.type, genre, query: '', sort: 'autumn', page: 1 })}`}
+                        class="border-umber-sienna/70 hover:border-umber-amber text-umber-cream/85 rounded-full border px-2.5 py-0.5 text-xs transition-colors"
+                      >
+                        {genre}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )
+            }
+
+            {item.synopsis !== null && <p class="text-umber-cream/90 leading-relaxed">{item.synopsis}</p>}
+
+            {
+              itemPlatforms !== null && (
+                <div>
+                  <p class="text-umber-ash text-[0.7rem] tracking-[0.15em] uppercase">Dónde verla</p>
+                  {itemPlatforms.length === 0 ? (
+                    <p class="text-umber-ash mt-1.5 text-sm">No está en plataformas de suscripción ahora mismo.</p>
+                  ) : (
+                    <ul class="mt-2 flex flex-wrap gap-1.5">
+                      {itemPlatforms.map((name) => (
+                        <li class="border-umber-sienna/70 rounded-full border px-2.5 py-0.5 text-sm">{name}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )
+            }
+
+            {/* `data-content-card`: ahí busca el botón de favorito dónde dar su aviso. */}
+            <div data-content-card class="flex flex-wrap items-center gap-4 pt-2">
+              {
+                user === null ? (
+                  <a href={loginHref} class="text-umber-ash hover:text-umber-cream text-sm underline underline-offset-4">
+                    Entra para guardarla
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    data-favorite-button
+                    data-content-id={item.id}
+                    aria-pressed={favorite ? 'true' : 'false'}
+                    class="group border-umber-amber/50 text-umber-amber hover:bg-umber-amber/10 aria-pressed:bg-umber-amber aria-pressed:text-umber-base rounded-full border px-4 py-1.5 text-sm font-medium transition-colors"
+                  >
+                    <span class="group-aria-pressed:hidden">Guardar</span>
+                    <span class="hidden group-aria-pressed:inline">Guardada</span>
+                  </button>
+                )
+              }
+              <a
+                href={`/chat?mode=${item.type}`}
+                class="text-umber-cream/85 hover:text-umber-cream text-sm underline underline-offset-4"
+              >
+                Pedirle a Umber algo para hoy
+              </a>
+              <p data-field="favorite-status" role="status" hidden class="text-umber-amber w-full text-xs"></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</Layout>
+
+<script>
+  import { initFavoriteButtons } from '@/scripts/content-card';
+
+  initFavoriteButtons();
+</script>

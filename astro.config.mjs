@@ -10,6 +10,28 @@ export default defineConfig({
   output: 'server',
   adapter: vercel(),
 
+  // CSP con los hashes de los scripts y estilos que genera Astro. En las páginas
+  // SSR va como cabecera, así que `frame-ancestors` sí se aplica (en un <meta>
+  // no). No funciona en `astro dev`: se prueba con `build` + `preview`. Las
+  // otras cabeceras de seguridad las pone `src/middleware.ts`.
+  security: {
+    csp: {
+      directives: [
+        "default-src 'self'",
+        "img-src 'self' https://image.tmdb.org",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+      ],
+    },
+  },
+  // No se pinta Markdown con código (los prompts se leen con `?raw`), y Shiki
+  // usa estilos en línea que el CSP bloquearía.
+  markdown: { syntaxHighlight: false },
+
   // Esquema de variables de entorno. Se consume siempre desde `src/lib/env.ts`.
   // `context: 'server'` impide que el bundle de cliente pueda importarlas.
   env: {
@@ -17,17 +39,24 @@ export default defineConfig({
       // DeepSeek — solo chat (no tiene endpoint de embeddings)
       DEEPSEEK_API_KEY: envField.string({ context: 'server', access: 'secret' }),
 
-      // Embeddings — servidor OpenAI-compatible con Qwen3-Embedding-0.6B
+      // Embeddings — Qwen3-Embedding-0.6B por la API de OpenAI. En producción,
+      // Cloudflare Workers AI; en local sin conexión, `npm run embeddings`.
       EMBEDDINGS_URL: envField.string({
         context: 'server',
         access: 'public',
         default: 'http://127.0.0.1:8080/v1',
       }),
-      // Solo si el servicio está detrás de un gateway autenticado.
+      // El token de Cloudflare. El servidor local no pide nada.
       EMBEDDINGS_API_KEY: envField.string({
         context: 'server',
         access: 'secret',
         optional: true,
+      }),
+      // Nombre del modelo en el servicio: `@cf/qwen/qwen3-embedding-0.6b` en Cloudflare.
+      EMBEDDINGS_MODEL: envField.string({
+        context: 'server',
+        access: 'public',
+        default: 'Qwen/Qwen3-Embedding-0.6B',
       }),
 
       // Supabase

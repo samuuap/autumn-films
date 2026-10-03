@@ -17,7 +17,7 @@ import {
 import {
   MAX_HISTORY_MESSAGES,
   isChatMode,
-  type ChatMessage,
+  type ChatHistoryMessage,
   type ChatMode,
   type ChatRequestBody,
   type Recommendation,
@@ -54,8 +54,12 @@ const mode: ChatMode = modeAttribute;
 
 /** Id de la conversación guardada. Solo existe con sesión. */
 let conversationId: string | null = root.dataset.conversationId || null;
-/** Turnos completos de esta visita. Sin sesión es todo el historial que hay. */
-const pastMessages: ChatMessage[] = [];
+/**
+ * Turnos completos de esta visita. Sin sesión es todo el historial que hay, y
+ * los de Umber llevan lo que devolvió `done`: el servidor lo necesita para saber
+ * cuántas preguntas lleva y qué candidatos le quedan.
+ */
+const pastMessages: ChatHistoryMessage[] = [];
 const favorites = new Set<string>(JSON.parse(root.dataset.favorites ?? '[]') as string[]);
 let controller: AbortController | null = null;
 
@@ -107,8 +111,13 @@ function appendAssistantMessage(): HTMLElement {
   return bubble;
 }
 
+const THINKING = 'Pensando…';
+const SEARCHING = 'Buscando títulos que encajen…';
+
 function resetAssistantMessage(bubble: HTMLElement): void {
-  part(bubble, 'status').hidden = false;
+  const status = part(bubble, 'status');
+  status.textContent = THINKING;
+  status.hidden = false;
   part(bubble, 'body').replaceChildren();
   part(bubble, 'error').hidden = true;
   part(bubble, 'cards').replaceChildren();
@@ -121,11 +130,27 @@ function showError(bubble: HTMLElement, message: string, retry: () => void): voi
   required<HTMLButtonElement>(bubble, '[data-retry]').onclick = retry;
 }
 
+/** Animación de entrada; el CSS está en `global.css`. */
+function revealCard(card: HTMLElement, index: number): void {
+  card.style.setProperty('--reveal-delay', `${String(index * 150)}ms`);
+  card.classList.add('reveal-card');
+  const poster = card.querySelector<HTMLImageElement>('[data-field="poster"]');
+  if (poster === null || poster.hidden) return;
+  // Sin esperar a la carga, el revelado pasaría sobre un hueco vacío.
+  poster.dataset.develop = 'waiting';
+  const develop = (): void => {
+    poster.dataset.develop = 'on';
+  };
+  poster.addEventListener('load', develop, { once: true });
+  poster.addEventListener('error', develop, { once: true });
+}
+
 function renderCards(bubble: HTMLElement, recommendations: readonly Recommendation[]): void {
   part(bubble, 'cards').replaceChildren(
-    ...recommendations.map((recommendation) => {
+    ...recommendations.map((recommendation, index) => {
       const card = clone(templates.card);
       fillContentCard(card, recommendation, favorites.has(recommendation.id));
+      revealCard(card, index);
       return card;
     }),
   );
@@ -182,8 +207,31 @@ async function send(message: string, bubble?: HTMLElement): Promise<void> {
   controller = current;
   setBusy(true);
 
+  const status = part(target, 'status');
+  const body = part(target, 'body');
   let text = '';
   let finished = false;
+
+  /*
+   * Como mucho un repintado por fotograma: cada uno rehace el HTML de toda la
+   * respuesta y mide la página para seguir abajo, y los fragmentos llegan más
+   * deprisa de lo que se ven. `flush` pinta ya lo pendiente, antes de las fichas
+   * o de un error.
+   */
+  let frame: number | null = null;
+  const paint = (): void => {
+    frame = null;
+    keepPinned(() => {
+      status.hidden = true;
+      body.innerHTML = renderReply(text);
+    });
+  };
+  const flush = (): void => {
+    if (frame === null) return;
+    cancelAnimationFrame(frame);
+    paint();
+  };
+
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -200,13 +248,21 @@ async function send(message: string, bubble?: HTMLElement): Promise<void> {
     for await (const event of readChatEvents(response.body)) {
       if (event.event === 'delta') {
         text += event.data.text;
-        keepPinned(() => {
-          part(target, 'status').hidden = true;
-          part(target, 'body').innerHTML = renderReply(text);
-        });
+        frame ??= requestAnimationFrame(paint);
+      } else if (event.event === 'searching') {
+        status.textContent = SEARCHING;
       } else if (event.event === 'done') {
+        flush();
         finished = true;
-        pastMessages.push({ role: 'user', content: message }, { role: 'assistant', content: text });
+        pastMessages.push(
+          { role: 'user', content: message },
+          {
+            role: 'assistant',
+            content: text,
+            recommendation_ids: event.data.recommendations.map((item) => item.id),
+            ...(event.data.search === null ? {} : { search: event.data.search }),
+          },
+        );
         if (event.data.conversation_id !== null) {
           conversationId = event.data.conversation_id;
           // Recargar la página vuelve a esta conversación en vez de empezar otra.
@@ -216,12 +272,17 @@ async function send(message: string, bubble?: HTMLElement): Promise<void> {
           renderCards(target, event.data.recommendations);
         });
       } else {
+        flush();
         finished = true;
         showError(target, event.data.message, retry);
       }
     }
-    if (!finished) showError(target, CUT_ERROR, retry);
+    if (!finished) {
+      flush();
+      showError(target, CUT_ERROR, retry);
+    }
   } catch {
+    flush();
     if (current.signal.aborted) {
       showError(target, 'Has detenido la respuesta.', retry);
     } else {
@@ -262,6 +323,21 @@ input.addEventListener('keydown', (event) => {
 
 stopButton.addEventListener('click', () => {
   controller?.abort();
+});
+
+/*
+ * Sin sesión, la charla solo vive en memoria: ir a «Entrar» la perdería. Si ya
+ * hay algo hablado, el enlace se abre en otra pestaña, como el de las fichas;
+ * tras entrar allí, el siguiente mensaje de esta ya va con sesión y el servidor
+ * guarda también lo anterior. Vale para el de la cabecera y para cualquier otro.
+ */
+document.addEventListener('click', (event) => {
+  if (conversationId !== null || pastMessages.length === 0) return;
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href^="/entrar"]') : null;
+  if (link === null || link.target === '_blank') return;
+  event.preventDefault();
+  window.open(link.href, '_blank', 'noopener');
 });
 
 root.querySelectorAll<HTMLButtonElement>('[data-suggestion]').forEach((button) => {

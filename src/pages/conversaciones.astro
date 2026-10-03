@@ -1,11 +1,19 @@
 ---
-/** Conversaciones guardadas del usuario, para retomarlas. */
+/** Conversaciones guardadas del usuario, para retomarlas o borrarlas. */
 import Layout from '@/layouts/Layout.astro';
-import { CONVERSATION_LIST_LIMIT, listConversations } from '@/lib/conversations';
+import { UUID_PATTERN } from '@/lib/api';
+import { CONVERSATION_LIST_LIMIT, deleteConversation, listConversations } from '@/lib/conversations';
 import { CHAT_MODE_DEFINITIONS } from '@/lib/types';
 
 const { user, supabase } = Astro.locals;
 if (user === null) return Astro.redirect('/entrar?next=%2Fconversaciones');
+
+// Borrar es un formulario, para que funcione sin JavaScript.
+if (Astro.request.method === 'POST') {
+  const id = (await Astro.request.formData()).get('id');
+  if (typeof id === 'string' && UUID_PATTERN.test(id)) await deleteConversation(supabase, id);
+  return Astro.redirect('/conversaciones', 303);
+}
 
 const conversations = await listConversations(supabase);
 
@@ -40,10 +48,10 @@ function preview(text: string | null): string {
         <>
           <ul class="divide-umber-surface mt-6 divide-y">
             {conversations.map((conversation) => (
-              <li>
+              <li class="flex items-center gap-2">
                 <a
                   href={`/chat?conversation=${conversation.id}`}
-                  class="hover:bg-umber-surface/60 -mx-3 block rounded-lg px-3 py-4 transition-colors"
+                  class="hover:bg-umber-surface/60 -ml-3 block min-w-0 flex-1 rounded-lg px-3 py-4 transition-colors"
                 >
                   <span class="block leading-relaxed">«{preview(conversation.firstMessage)}»</span>
                   <span class="text-umber-ash mt-1 block text-xs">
@@ -53,6 +61,16 @@ function preview(text: string | null): string {
                     </time>
                   </span>
                 </a>
+                <form method="post" data-delete-conversation>
+                  <input type="hidden" name="id" value={conversation.id} />
+                  <button
+                    type="submit"
+                    aria-label={`Borrar la conversación «${preview(conversation.firstMessage)}»`}
+                    class="text-umber-ash hover:text-umber-cream rounded px-2 py-1.5 text-sm transition-colors"
+                  >
+                    Borrar
+                  </button>
+                </form>
               </li>
             ))}
           </ul>
@@ -66,3 +84,7 @@ function preview(text: string | null): string {
     }
   </main>
 </Layout>
+
+<script>
+  import '@/scripts/conversations';
+</script>

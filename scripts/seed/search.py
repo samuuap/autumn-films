@@ -18,7 +18,7 @@ import json
 from openai import OpenAI
 
 from common import (
-    EMBEDDING_MODEL,
+    EMBEDDING_SERVICE_MODEL,
     format_query,
     http_session,
     normalize_for_embedding,
@@ -42,7 +42,7 @@ def main() -> None:
 
     for query in args.queries:
         vector = embeddings.embeddings.create(
-            model=EMBEDDING_MODEL, input=[format_query(normalize_for_embedding(query))], encoding_format="float"
+            model=EMBEDDING_SERVICE_MODEL, input=[format_query(normalize_for_embedding(query))], encoding_format="float"
         ).data[0].embedding
         response = session.post(
             f"{require_env('SUPABASE_URL')}/rest/v1/rpc/search_content",

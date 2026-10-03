@@ -1,7 +1,10 @@
 /**
- * Piezas comunes de los endpoints de `src/pages/api/`: leer JSON y convertir
- * errores tipados en respuestas que se pueden enseñar a la persona.
+ * Piezas comunes de los endpoints de `src/pages/api/`: leer y validar la
+ * entrada, y convertir errores tipados en respuestas que se pueden enseñar a la
+ * persona.
  */
+import type { APIContext } from 'astro';
+
 import {
   AuthError,
   NotFoundError,
@@ -73,3 +76,43 @@ export async function readJson(request: Request): Promise<unknown> {
 }
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** Región de plataformas, ISO 3166-1 alfa-2 en mayúsculas: `ES`, `MX`. */
+export const REGION_PATTERN = /^[A-Z]{2}$/u;
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Quita caracteres de control salvo saltos de línea y tabuladores, y recorta. */
+function cleanText(text: string): string {
+  return text.replace(/\r\n?/gu, '\n').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/gu, '').trim();
+}
+
+/** `field` en minúscula y con artículo («el mensaje»): va en mitad y al principio de frase. */
+export function parseText(value: unknown, maxChars: number, field: string): string {
+  const subject = field.charAt(0).toUpperCase() + field.slice(1);
+  if (typeof value !== 'string') {
+    throw new ValidationError(`Falta ${field}.`);
+  }
+  const text = cleanText(value);
+  if (text.length === 0) {
+    throw new ValidationError(`${subject} está vacío.`);
+  }
+  if (text.length > maxChars) {
+    throw new ValidationError(
+      `${subject} es demasiado largo: ${String(text.length)} caracteres, el máximo es ${String(maxChars)}.`,
+    );
+  }
+  return text;
+}
+
+/** IP de la petición. Astro lanza si el adaptador no la conoce; en Vercel y en `astro dev` la conoce. */
+export function readClientAddress(context: APIContext): string | null {
+  try {
+    return context.clientAddress;
+  } catch {
+    console.warn('[api] Petición sin IP: cuenta en el cupo compartido «ip:unknown».');
+    return null;
+  }
+}

@@ -46,6 +46,9 @@ interface CacheEntry {
   readonly fresh: boolean;
 }
 
+/** La caché leída, por id del título. */
+export type PlatformsCache = ReadonlyMap<string, CacheEntry>;
+
 /** Lo que hay en `by_region`, si tiene la forma esperada. */
 function parseByRegion(value: Json): PlatformsByRegion | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -57,10 +60,16 @@ function parseByRegion(value: Json): PlatformsByRegion | null {
   return byRegion;
 }
 
-async function readCache(
+/**
+ * Lee la caché de esos títulos. Nunca falla: si Supabase no responde, devuelve
+ * una caché vacía. Solo necesita los ids, así que se puede pedir a la vez que
+ * los propios títulos y pasársela después a `lookupPlatforms`.
+ */
+export async function readPlatformsCache(
   ids: readonly string[],
   signal: AbortSignal | undefined,
-): Promise<Map<string, CacheEntry>> {
+): Promise<PlatformsCache> {
+  if (ids.length === 0) return new Map();
   const timeout = AbortSignal.timeout(CACHE_READ_TIMEOUT_MS);
   try {
     const rows = unwrap(
@@ -111,19 +120,22 @@ async function writeCache(fetched: ReadonlyMap<string, PlatformsByRegion>): Prom
 
 /**
  * Plataformas de suscripción y gratis de cada título en `region`. Solo pregunta
- * a TMDB por los que no están en la caché o han caducado.
+ * a TMDB por los que no están en la caché o han caducado. Con `cache`, usa la
+ * que ya se pidió con `readPlatformsCache` en vez de leerla otra vez.
  */
 export async function lookupPlatforms(
   items: readonly PlatformItem[],
   region: string,
   signal?: AbortSignal,
+  cache?: Promise<PlatformsCache>,
 ): Promise<PlatformsLookup> {
   if (items.length === 0) return { platforms: [], saved: Promise.resolve() };
 
-  const cached = await readCache(
-    items.map((item) => item.id),
-    signal,
-  );
+  const cached = await (cache ??
+    readPlatformsCache(
+      items.map((item) => item.id),
+      signal,
+    ));
   const pending = items.filter((item) => cached.get(item.id)?.fresh !== true);
 
   const fetched = new Map<string, PlatformsByRegion>();

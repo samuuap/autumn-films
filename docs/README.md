@@ -11,8 +11,8 @@ La documentación **técnica** (stack, esquema, convenciones, estética) está e
 | [1](fase-1-scaffolding.md) | Scaffolding y configuración base | ✅ Completada |
 | [2](fase-2-base-de-datos.md) | Base de datos: esquema, pgvector y RLS | ✅ Completada |
 | [3](fase-3-seed-corpus.md) | Seed del corpus desde TMDB | ✅ Completada |
-| [4](fase-4-api-chat.md) | API del chat con streaming | 🔄 En curso |
-| [5](fase-5-frontend.md) | Frontend, ficha de contenido y auth | 🔄 Código completo; falta configurar URLs de auth en Supabase |
+| [4](fase-4-api-chat.md) | API del chat con streaming | ✅ Completada |
+| [5](fase-5-frontend.md) | Frontend, ficha de contenido y auth | ✅ Completada |
 | [6](fase-6-pulido-despliegue.md) | Pulido, i18n y despliegue | ⏳ Pendiente |
 
 Leyenda: ✅ completada · 🔄 en curso · ⏳ pendiente · ⛔ bloqueada
@@ -35,16 +35,20 @@ su fase.
 | Esquema versionado en `supabase/migrations/` con el CLI de Supabase | El esquema queda en el repo, revisable en diff y reproducible tras cada reindexado del corpus | 2, 3 |
 | Índice vectorial HNSW en lugar de ivfflat | Sin listas que dimensionar, mejor recall, y se crea sobre la tabla vacía. A 5.000 filas el `lists = 100` del diseño original degradaría la recuperación | 2, 4 |
 | `search_content` con `hnsw.iterative_scan = strict_order` | Sin ella, el índice devolvía como mucho 40 filas y el filtro por tipo actuaba después: con el plan genérico, 295 de 300 búsquedas de series se quedaban cortas, alguna con 0. Medido y corregido en la Fase 3 | 2, 3, 4 |
-| `autumn_score` = puntuación 0–100 de deepseek-flash / 100, con prefiltro heurístico | La heurística sola es tosca y el LLM solo gasta llamadas en blockbusters obvios. Se cachea con un hash del prompt, así que el corpus es reproducible | 3, 4 |
-| `autumn_score` filtra el corpus **y** reordena en el chat, con peso 0,1 | Umber solo conoce títulos otoñales, y dentro de ellos los más otoñales pesan más. Moderado porque el score tiene ruido en su franja media | 3, 4 |
+| `autumn_score` = media de 3 pasadas de deepseek-flash (0–100) / 100 sobre todo el universo, sin prefiltro | Una pasada cambiaba hasta 40 puntos según el lote, y el prefiltro heurístico premiaba el terror y dejaba fuera clásicos como *Tienes un e-mail*. Unos 0,40 USD por pasada. Se cachea con un hash del prompt, así que el corpus es reproducible | 3, 4 |
+| **Otoño antes que Halloween** en el criterio de `autumn_score` | Decisión de producto: lo que es sí o sí de otoño (*El club de los poetas muertos*, *Las chicas Gilmore*, *Harry Potter*). Halloween cuenta si la película va de él; el terror sin Halloween ni otoño, 40 como mucho. El terror pasó del 30 % al 14 % del corpus | 3, 4 |
+| `autumn_score` filtra el corpus **y** reordena en el chat, con peso 0,2 | Umber solo conoce títulos otoñales, y dentro de ellos los más otoñales pesan más. Era 0,1 mientras el score tenía el ruido de una sola pasada | 3, 4 |
 | Corpus 90/10: 4.500 películas y 500 series | Decisión de producto. TMDB tiene muchas menos series con votos suficientes | 3, 4, 5 |
 | Documentos vectorizados en inglés, con respaldo en español | TMDB solo tiene keywords en inglés y sus sinopsis inglesas son más completas. La recuperación con consultas en español funciona | 3, 4, 6 |
 | Embeddings locales con un servidor Python propio (`npm run embeddings`) | No hay Docker, y Docker Desktop exige licencia de pago en una empresa grande. Habla la misma API que TEI, así que el código TypeScript no cambia | 3, 4, 6 |
 | deepseek-flash sin razonamiento: en la puntuación del corpus y en el chat de `movie` y `tv` | Razona por defecto y esos tokens cuentan contra `max_tokens`: vaciaba respuestas de la puntuación y, en el chat, 2 de 6 respuestas medidas; con más tope, la primera palabra tardaba hasta 6,3 s sin elegir mejor. `weekend` y `month` podrán activarlo | 3, 4 |
 | El umbral de similitud se aplica en TypeScript; `search_content` recibe `min_score = -1` | Con un umbral que pocas filas superan, la búsqueda iterativa recorre todo el índice para completar el `LIMIT`: medido hasta 4,3 s y un timeout del rol `anon`. Filtrar después da el mismo resultado | 2, 4 |
 | Sesión por SSR en cookies `httpOnly` (`@supabase/ssr`), verificada en el middleware | Las claves de Supabase siguen solo en servidor, RLS se evalúa en servidor y un XSS no puede leer la sesión. Los endpoints aceptan también `Authorization: Bearer` para scripts | 4, 5 |
+| Producción sin gastos fijos; embeddings en Cloudflare Workers AI (plan gratuito) | Decisión de producto: solo se paga DeepSeek. Cloudflare sirve el mismo Qwen3-Embedding-0.6B con vectores idénticos a los del corpus, sin servidor que mantener. Hugging Face exige PRO desde julio de 2026. Se acepta su latencia: 1,2 s de mediana por consulta, con picos de varios segundos | 6 |
 | Interfaz sin framework: Astro y `<script>` | Una pantalla con poco estado; el proyecto sigue sin dependencias de framework | 5 |
 | Plataformas de TMDB cacheadas en una tabla aparte (`platforms_cache`), 3 días, todas las regiones | TMDB manda todas las regiones en la misma respuesta. Tabla aparte para que la app no escriba en el corpus. La usan el chat y los favoritos | 4, 5 |
+| **Conversación guiada**: Umber pregunta de 2 a 4 veces, busca cuando lo decide con un resumen del ánimo, y «otra» sale de los mismos 10 candidatos | Decisión de producto: un cinéfilo que te conoce, no un buscador. Las reglas las hace cumplir el servidor con `tool_choice`, y el estado viaja en los propios mensajes | 4, 5 |
+| El idioma de la respuesta lo decide el servidor, y los candidatos llegan en ese idioma | Dejarlo al modelo acertó 11 de 20 mensajes (9 de 10 en inglés recibieron la respuesta en español); con el detector, 20 de 20. Con título y sinopsis en inglés, además, nombra *Always Be My Maybe* y no *Siempre queda el amor* | 4, 6 |
 | Rate limiting de `/api/chat` en Supabase (`rate_limits` + `hit_rate_limit`), por usuario o por IP | En Vercel un contador en memoria no sirve, y Supabase ya está: sin otro proveedor. Si el contador falla, el chat también, para no quedar abierto sin saberlo | 4, 6 |
 
 ---
@@ -56,9 +60,6 @@ Ordenadas por la fase que las bloquea. El detalle está en cada archivo.
 | # | Pregunta | Bloquea |
 |---|---|---|
 | 1 | ¿Debe `anon` poder leer la columna `embedding`? | [Fase 2](fase-2-base-de-datos.md) |
-| 2 | `autumn_score` varía según el lote en la franja media: ¿puntuar varias veces y promediar? Ya reordena el chat con peso 0,1 ([detalle](fase-3-seed-corpus.md)) | [Fase 4](fase-4-api-chat.md) |
-| 3 | ¿Cuántos candidatos se le pasan al modelo? Hoy, 10 | [Fase 4](fase-4-api-chat.md) |
-| 4 | ¿Dónde corre el servicio de embeddings en producción? | [Fase 6](fase-6-pulido-despliegue.md) |
 
 ---
 

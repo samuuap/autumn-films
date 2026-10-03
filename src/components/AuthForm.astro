@@ -1,28 +1,96 @@
 ---
 /**
- * Formulario de email y contraseña para entrar o registrarse. Funciona sin
- * JavaScript: envía a la misma página, que lo procesa en el servidor.
+ * Formulario para entrar o registrarse. Funciona sin JavaScript: envía a la misma
+ * página, que lo valida todo en el servidor. Con JavaScript (`src/scripts/auth-form.ts`)
+ * añade el botón de mostrar la contraseña y avisa al momento si las dos no coinciden.
  */
+import {
+  MAX_PASSWORD_CHARS,
+  MIN_PASSWORD_CHARS,
+  USERNAME_INPUT_PATTERN,
+  type AuthFormError,
+  type AuthFormField,
+} from '@/lib/auth';
+
 interface Props {
   kind: 'login' | 'signup';
   email?: string;
-  error?: string | null;
+  username?: string;
+  error?: AuthFormError | null;
 }
 
-const { kind, email = '', error = null } = Astro.props;
+const { kind, email = '', username = '', error = null } = Astro.props;
+const signup = kind === 'signup';
+
 const inputClass =
-  'bg-umber-surface border-umber-sienna/60 focus:border-umber-amber w-full rounded-lg border px-3 py-2.5 focus:outline-none';
+  'bg-umber-surface border-umber-sienna/60 focus:border-umber-amber aria-invalid:border-red-700 w-full rounded-lg border px-3 py-2.5 focus:outline-none';
+const helpClass = 'text-umber-ash text-xs';
+const errorClass = 'text-xs text-red-300';
+
+const errorFor = (field: AuthFormField): string | null => (error?.field === field ? error.message : null);
+const describedBy = (field: AuthFormField, help: boolean): string | undefined =>
+  [help ? `${field}-help` : null, errorFor(field) === null ? null : `${field}-error`]
+    .filter((id) => id !== null)
+    .join(' ') || undefined;
+
+const passwordFields = signup
+  ? [
+      {
+        name: 'password',
+        label: 'Contraseña',
+        autocomplete: 'new-password',
+        help: `De ${String(MIN_PASSWORD_CHARS)} a ${String(MAX_PASSWORD_CHARS)} caracteres.`,
+      },
+      { name: 'password_confirm', label: 'Repite la contraseña', autocomplete: 'new-password', help: null },
+    ] as const
+  : ([{ name: 'password', label: 'Contraseña', autocomplete: 'current-password', help: null }] as const);
 ---
 
 {
-  error !== null && (
+  error !== null && error.field === null && (
     <p role="alert" class="mt-6 rounded-lg border border-red-900/60 bg-red-950/30 p-3 text-sm">
-      {error}
+      {error.message}
     </p>
   )
 }
 
-<form method="post" class="mt-8 space-y-5">
+<form method="post" data-auth-form class="mt-8 space-y-5">
+  {
+    signup && (
+      <div class="space-y-1.5">
+        <label for="username" class="text-sm font-medium">
+          Nombre de usuario
+        </label>
+        <input
+          id="username"
+          name="username"
+          type="text"
+          autocomplete="nickname"
+          autocapitalize="none"
+          spellcheck="false"
+          required
+          minlength={3}
+          maxlength={20}
+          pattern={USERNAME_INPUT_PATTERN}
+          title="De 3 a 20 caracteres: letras sin tilde, números o guion bajo."
+          value={username}
+          aria-invalid={errorFor('username') === null ? undefined : 'true'}
+          aria-describedby={describedBy('username', true)}
+          autofocus={errorFor('username') !== null}
+          class={inputClass}
+        />
+        <p id="username-help" class={helpClass}>
+          De 3 a 20 caracteres: letras sin tilde, números o guion bajo.
+        </p>
+        {errorFor('username') !== null && (
+          <p id="username-error" role="alert" class={errorClass}>
+            {errorFor('username')}
+          </p>
+        )}
+      </div>
+    )
+  }
+
   <div class="space-y-1.5">
     <label for="email" class="text-sm font-medium">Email</label>
     <input
@@ -32,33 +100,79 @@ const inputClass =
       autocomplete="email"
       required
       value={email}
-      class={inputClass}
-    />
-  </div>
-  <div class="space-y-1.5">
-    <label for="password" class="text-sm font-medium">Contraseña</label>
-    <input
-      id="password"
-      name="password"
-      type="password"
-      autocomplete={kind === 'login' ? 'current-password' : 'new-password'}
-      minlength={kind === 'signup' ? 8 : undefined}
-      aria-describedby={kind === 'signup' ? 'password-help' : undefined}
-      required
+      aria-invalid={errorFor('email') === null ? undefined : 'true'}
+      aria-describedby={describedBy('email', false)}
+      autofocus={errorFor('email') !== null}
       class={inputClass}
     />
     {
-      kind === 'signup' && (
-        <p id="password-help" class="text-umber-ash text-xs">
-          Mínimo 8 caracteres.
+      errorFor('email') !== null && (
+        <p id="email-error" role="alert" class={errorClass}>
+          {errorFor('email')}
         </p>
       )
     }
   </div>
+
+  {
+    passwordFields.map((field) => (
+      <div class="space-y-1.5">
+        <label for={field.name} class="text-sm font-medium">
+          {field.label}
+        </label>
+        <div class="relative">
+          <input
+            id={field.name}
+            name={field.name}
+            type="password"
+            autocomplete={field.autocomplete}
+            required
+            minlength={signup ? MIN_PASSWORD_CHARS : undefined}
+            maxlength={signup ? MAX_PASSWORD_CHARS : undefined}
+            aria-invalid={errorFor(field.name) === null ? undefined : 'true'}
+            aria-describedby={describedBy(field.name, field.help !== null)}
+            autofocus={errorFor(field.name) !== null}
+            class={`${inputClass} pr-24`}
+          />
+          {/* Sin JavaScript no hace nada: el script le quita el `hidden`. */}
+          <button
+            type="button"
+            data-password-toggle
+            aria-controls={field.name}
+            hidden
+            class="text-umber-ash hover:text-umber-cream absolute inset-y-0 right-0 rounded-r-lg px-3 text-sm transition-colors"
+          >
+            <span data-label>Mostrar</span>
+            <span class="sr-only"> la contraseña</span>
+          </button>
+        </div>
+        {field.help !== null && (
+          <p id={`${field.name}-help`} class={helpClass}>
+            {field.help}
+          </p>
+        )}
+        {field.name === 'password_confirm' && (
+          <p data-password-match aria-live="polite" hidden class="text-umber-amber text-xs data-[state=mismatch]:text-red-300" />
+        )}
+        {errorFor(field.name) !== null && (
+          <p id={`${field.name}-error`} role="alert" class={errorClass}>
+            {errorFor(field.name)}
+          </p>
+        )}
+      </div>
+    ))
+  }
+
   <button
     type="submit"
     class="bg-umber-amber text-umber-base hover:bg-umber-amber/90 w-full rounded-lg px-4 py-2.5 font-semibold transition-colors"
   >
-    {kind === 'login' ? 'Entrar' : 'Crear cuenta'}
+    {signup ? 'Crear cuenta' : 'Entrar'}
   </button>
 </form>
+
+<script>
+  import { initAuthForms } from '@/scripts/auth-form';
+
+  initAuthForms();
+</script>

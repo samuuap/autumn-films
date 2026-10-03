@@ -158,6 +158,24 @@ export type Database = {
           },
         ]
       }
+      profiles: {
+        Row: {
+          created_at: string
+          id: string
+          username: string | null
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          username?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          username?: string | null
+        }
+        Relationships: []
+      }
       rate_limits: {
         Row: {
           expires_at: string
@@ -216,10 +234,43 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      append_conversation_messages: {
+        Args: { p_id: string; p_messages: Json }
+        Returns: boolean
+      }
+      content_genres: {
+        Args: { p_type?: string }
+        Returns: {
+          genre: string
+          titles: number
+        }[]
+      }
+      explore_content: {
+        Args: {
+          p_genre?: string
+          p_limit?: number
+          p_offset?: number
+          p_query?: string
+          p_sort?: string
+          p_type?: string
+        }
+        Returns: {
+          autumn_score: number
+          id: string
+          poster_path: string
+          title: string
+          title_en: string
+          total_count: number
+          type: string
+          year: number
+        }[]
+      }
+      fold_search_text: { Args: { p_text: string }; Returns: string }
       hit_rate_limit: {
         Args: { p_key: string; p_limits: number[]; p_window_seconds: number[] }
         Returns: number
       }
+      is_username_available: { Args: { p_username: string }; Returns: boolean }
       search_content: {
         Args: {
           content_type?: string
@@ -235,7 +286,9 @@ export type Database = {
           poster_path: string
           similarity: number
           synopsis: string
+          synopsis_en: string
           title: string
+          title_en: string
           tmdb_id: number
           type: string
           year: number

@@ -1,15 +1,16 @@
 /**
- * Rate limiting de `/api/chat`, con los contadores en Supabase (`rate_limits`).
+ * Rate limiting de `/api/chat` y `/api/search`, con los contadores en Supabase
+ * (`rate_limits`).
  *
  * En Vercel cada petición puede caer en una instancia distinta, así que el
  * contador no puede vivir en memoria. `hit_rate_limit` cuenta en ventanas fijas
  * con un upsert atómico, y solo la puede llamar la secret key: con la
  * publishable, cualquiera podría gastar el cupo de otra IP.
  *
- * Con sesión se cuenta por usuario; sin ella, por IP. Si el contador no
- * responde, el chat tampoco: sin límite, el endpoint que cuesta dinero quedaría
- * abierto sin que nadie se enterase. La búsqueda depende de la misma base, así
- * que esto no añade ninguna caída que no hubiera ya.
+ * Con sesión se cuenta por usuario; sin ella, por IP. Cada ámbito lleva su
+ * propia cuenta. Si el contador no responde, el endpoint tampoco: sin límite,
+ * quedaría abierto sin que nadie se enterase. La búsqueda depende de la misma
+ * base, así que esto no añade ninguna caída que no hubiera ya.
  */
 import { RateLimitError } from '@/lib/errors';
 import { getSupabaseAdminClient, unwrap } from '@/lib/supabase';
@@ -22,24 +23,50 @@ export interface RateLimitRule {
 const MINUTE = 60;
 const DAY = 24 * 60 * 60;
 
-/**
- * Cada respuesta tarda varios segundos en llegar: nadie escribe ocho mensajes
- * por minuto a mano. El límite diario es el techo del gasto por persona.
- */
-export const USER_CHAT_LIMITS: readonly RateLimitRule[] = [
-  { windowSeconds: MINUTE, limit: 8 },
-  { windowSeconds: DAY, limit: 300 },
-];
+export type RateLimitScope = 'chat' | 'search';
 
-/**
- * Sin sesión, el diario es más bajo: crear una cuenta exige confirmar un email,
- * cambiar de IP no. Detrás de una IP puede haber varias personas (una oficina,
- * el CGNAT de un operador móvil), y por eso no es más bajo todavía.
- */
-export const ANONYMOUS_CHAT_LIMITS: readonly RateLimitRule[] = [
-  { windowSeconds: MINUTE, limit: 8 },
-  { windowSeconds: DAY, limit: 60 },
-];
+interface ScopeLimits {
+  readonly user: readonly RateLimitRule[];
+  readonly anonymous: readonly RateLimitRule[];
+  /** Lo que se cuenta, para el mensaje: «Has llegado al límite de {noun} de hoy». */
+  readonly noun: string;
+}
+
+export const RATE_LIMITS: Readonly<Record<RateLimitScope, ScopeLimits>> = {
+  /*
+   * Cada respuesta tarda varios segundos en llegar: nadie escribe ocho mensajes
+   * por minuto a mano. El diario es el techo del gasto por persona, y sin sesión
+   * es más bajo: crear una cuenta exige confirmar un email, cambiar de IP no.
+   * Detrás de una IP puede haber varias personas (una oficina, el CGNAT de un
+   * operador móvil), y por eso no es más bajo todavía.
+   */
+  chat: {
+    user: [
+      { windowSeconds: MINUTE, limit: 8 },
+      { windowSeconds: DAY, limit: 300 },
+    ],
+    anonymous: [
+      { windowSeconds: MINUTE, limit: 8 },
+      { windowSeconds: DAY, limit: 60 },
+    ],
+    noun: 'mensajes',
+  },
+  /*
+   * Sin DeepSeek: un embedding y una consulta. Más alto que el chat, pero con
+   * techo, porque el servicio de embeddings es nuestro y se puede saturar.
+   */
+  search: {
+    user: [
+      { windowSeconds: MINUTE, limit: 30 },
+      { windowSeconds: DAY, limit: 1000 },
+    ],
+    anonymous: [
+      { windowSeconds: MINUTE, limit: 20 },
+      { windowSeconds: DAY, limit: 300 },
+    ],
+    noun: 'búsquedas',
+  },
+};
 
 // ─── Claves ──────────────────────────────────────────────────────────────────
 
@@ -91,37 +118,39 @@ function formatWait(seconds: number): string {
   return hours === 1 ? '1 hora' : `${String(hours)} horas`;
 }
 
-function limitMessage(retryAfterSeconds: number, anonymous: boolean): string {
+function limitMessage(scope: RateLimitScope, retryAfterSeconds: number, anonymous: boolean): string {
   // Solo la ventana diaria hace esperar más de un minuto.
   if (retryAfterSeconds <= MINUTE) {
-    return `Vas muy deprisa. Espera ${formatWait(retryAfterSeconds)} y vuelve a escribir.`;
+    return `Vas muy deprisa. Espera ${formatWait(retryAfterSeconds)} y vuelve a intentarlo.`;
   }
-  const message = `Has llegado al límite de mensajes de hoy. Podrás seguir en ${formatWait(retryAfterSeconds)}.`;
+  const message = `Has llegado al límite de ${RATE_LIMITS[scope].noun} de hoy. Podrás seguir en ${formatWait(retryAfterSeconds)}.`;
   return anonymous ? `${message} Con la sesión iniciada el límite es más alto.` : message;
 }
 
-export interface ChatRequester {
+export interface Requester {
   /** `null` sin sesión. */
   readonly userId: string | null;
   /** IP de la petición. En Vercel la pone su proxy, así que el cliente no puede falsearla. */
   readonly clientAddress: string | null;
 }
 
-/** Cuenta un mensaje de chat. Lanza `RateLimitError` (429) si no cabe. */
-export async function enforceChatRateLimit(requester: ChatRequester): Promise<void> {
+/** Cuenta una petición del ámbito. Lanza `RateLimitError` (429) si no cabe. */
+export async function enforceRateLimit(scope: RateLimitScope, requester: Requester): Promise<void> {
   const { userId } = requester;
   const anonymous = userId === null;
-  const rules = anonymous ? ANONYMOUS_CHAT_LIMITS : USER_CHAT_LIMITS;
+  const limits = RATE_LIMITS[scope];
+  const rules = anonymous ? limits.anonymous : limits.user;
+  const identity = userId === null ? clientKey(requester.clientAddress) : `user:${userId}`;
 
   const retryAfterSeconds = unwrap(
     await getSupabaseAdminClient().rpc('hit_rate_limit', {
-      p_key: userId === null ? clientKey(requester.clientAddress) : `user:${userId}`,
+      p_key: `${scope}:${identity}`,
       p_window_seconds: rules.map((rule) => rule.windowSeconds),
       p_limits: rules.map((rule) => rule.limit),
     }),
   );
 
   if (retryAfterSeconds > 0) {
-    throw new RateLimitError(limitMessage(retryAfterSeconds, anonymous), retryAfterSeconds);
+    throw new RateLimitError(limitMessage(scope, retryAfterSeconds, anonymous), retryAfterSeconds);
   }
 }

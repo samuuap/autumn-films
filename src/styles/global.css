@@ -64,3 +64,57 @@
     outline-offset: 2px;
   }
 }
+
+/* ─── Revelado de una recomendación ──────────────────────────────────────────
+   Solo en las fichas que llegan en el chat (`revealCard` en src/scripts/chat.ts);
+   las de una conversación guardada salen quietas. El cartel se revela como una
+   foto, y no empieza hasta que la imagen ha cargado.
+   -------------------------------------------------------------------------- */
+@layer components {
+  .reveal-card {
+    animation:
+      card-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) var(--reveal-delay, 0ms) both,
+      card-glow 1.8s ease-out var(--reveal-delay, 0ms);
+  }
+
+  [data-develop='waiting'] {
+    opacity: 0;
+  }
+
+  [data-develop='on'] {
+    animation: poster-develop 1.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal-card,
+    [data-develop='on'] {
+      animation: none;
+    }
+  }
+}
+
+@keyframes card-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+@keyframes card-glow {
+  from,
+  25% {
+    border-color: color-mix(in oklab, var(--color-umber-amber) 55%, transparent);
+    box-shadow: 0 0 28px -6px color-mix(in oklab, var(--color-umber-amber) 35%, transparent);
+  }
+}
+
+@keyframes poster-develop {
+  from {
+    opacity: 0;
+    filter: sepia(1) blur(6px) brightness(0.55);
+    transform: scale(1.08);
+  }
+  35% {
+    opacity: 1;
+  }
+}

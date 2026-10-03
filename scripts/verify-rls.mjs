@@ -51,8 +51,8 @@ const rest = (path, options) => req(`${BASE}/rest/v1${path}`, options);
 
 const stamp = Date.now();
 const users = {
-  a: { email: `umber-rls-a-${stamp}@example.com`, password: `Aa${stamp}!xY` },
-  b: { email: `umber-rls-b-${stamp}@example.com`, password: `Bb${stamp}!xY` },
+  a: { email: `umber-rls-a-${stamp}@example.com`, password: `Aa${stamp}!xY`, username: `rls_a_${stamp}` },
+  b: { email: `umber-rls-b-${stamp}@example.com`, password: `Bb${stamp}!xY`, username: `rls_b_${stamp}` },
 };
 
 console.log(`\nProyecto: ${BASE}\n`);
@@ -63,7 +63,10 @@ try {
   for (const [name, user] of Object.entries(users)) {
     const created = await req(`${BASE}/auth/v1/admin/users`, {
       key: SECRET, method: 'POST',
-      body: { email: user.email, password: user.password, email_confirm: true },
+      body: {
+        email: user.email, password: user.password, email_confirm: true,
+        user_metadata: { username: user.username },
+      },
     });
     user.id = created.body?.id;
     if (user.id) cleanup.userIds.push(user.id);
@@ -128,6 +131,65 @@ try {
     });
     record(impostor.status === 401 || impostor.status === 403,
       'B NO puede crear una conversación a nombre de A', `HTTP ${impostor.status}`);
+  }
+  {
+    const append = (token, content) => rest('/rpc/append_conversation_messages', {
+      token, method: 'POST', body: { p_id: convId, p_messages: [{ role: 'user', content }] },
+    });
+    const own = await append(a.token, 'sigo');
+    const other = await append(b.token, 'intruso');
+    const read = await rest(`/conversations?select=messages&id=eq.${convId}`, { token: a.token });
+    const messages = Array.isArray(read.body) ? read.body[0]?.messages ?? [] : [];
+    record(own.body === true && messages.at(-1)?.content === 'sigo',
+      'A añade mensajes a su conversación con append_conversation_messages', JSON.stringify(own.body));
+    record(other.body === false && !messages.some((m) => m.content === 'intruso'),
+      'B NO puede añadir mensajes a la conversación de A', JSON.stringify(other.body));
+  }
+
+  // ─── Perfiles ──────────────────────────────────────────────────────────────
+  console.log('\nPerfiles');
+  {
+    const own = await rest('/profiles?select=id,username', { token: a.token });
+    record(Array.isArray(own.body) && own.body.length === 1 && own.body[0]?.username === a.username,
+      'el alta crea el perfil de A con su nombre de usuario, y A solo ve el suyo', JSON.stringify(own.body));
+  }
+  {
+    const other = await rest(`/profiles?select=id&id=eq.${a.id}`, { token: b.token });
+    record(Array.isArray(other.body) && other.body.length === 0, 'B NO ve el perfil de A',
+      `${other.body?.length ?? '?'} fila(s)`);
+  }
+  {
+    const patched = await rest(`/profiles?id=eq.${a.id}`, {
+      token: a.token, method: 'PATCH', prefer: 'return=representation', body: { username: 'a_mano' },
+    });
+    record(Array.isArray(patched.body) && patched.body.length === 0,
+      'A NO puede editar su perfil a mano (solo vía Auth)', `${patched.body?.length ?? '?'} fila(s) afectadas`);
+  }
+  {
+    const taken = await req(`${BASE}/auth/v1/admin/users`, {
+      key: SECRET, method: 'POST',
+      body: {
+        email: `umber-rls-c-${stamp}@example.com`, password: `Cc${stamp}!xY`, email_confirm: true,
+        user_metadata: { username: a.username },
+      },
+    });
+    if (taken.body?.id) cleanup.userIds.push(taken.body.id);
+    record(taken.status >= 400, 'una cuenta nueva NO puede quedarse el nombre de A', `HTTP ${taken.status}`);
+  }
+  {
+    const steal = await req(`${BASE}/auth/v1/user`, {
+      token: b.token, method: 'PUT', body: { data: { username: a.username } },
+    });
+    record(steal.status >= 400, 'B NO puede cambiarse al nombre de A', `HTTP ${steal.status}`);
+  }
+  {
+    const renamed = `rls_r_${stamp}`; // 20 caracteres como mucho
+    const change = await req(`${BASE}/auth/v1/user`, {
+      token: b.token, method: 'PUT', body: { data: { username: renamed } },
+    });
+    const read = await rest('/profiles?select=username', { token: b.token });
+    record(change.status === 200 && read.body?.[0]?.username === renamed,
+      'cambiar el nombre en Auth lo cambia en el perfil', `HTTP ${change.status} → ${JSON.stringify(read.body)}`);
   }
 
   // ─── Favoritos ─────────────────────────────────────────────────────────────

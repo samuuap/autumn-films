@@ -40,6 +40,12 @@ EMBEDDING_TASK = (
 
 load_dotenv(ROOT / ".env.local")
 
+# Cómo llama el servicio al modelo: `@cf/qwen/qwen3-embedding-0.6b` en Cloudflare,
+# el nombre de Hugging Face en el servidor local. Da los mismos vectores en los
+# dos (check-embeddings.py), así que `text_hash` sigue usando EMBEDDING_MODEL:
+# cambiar de servicio no obliga a volver a vectorizar el corpus.
+EMBEDDING_SERVICE_MODEL = os.environ.get("EMBEDDINGS_MODEL", "").strip() or EMBEDDING_MODEL
+
 
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()

@@ -1,16 +1,22 @@
 ---
 /**
  * Un mensaje del chat. Con `text` se pinta en el servidor (conversación
- * guardada); sin él sale vacío, como plantilla para el `<script>` del chat.
+ * guardada), con las fichas de lo que recomendó; sin él sale vacío, como
+ * plantilla para el `<script>` del chat.
  */
+import ContentCard from '@/components/ContentCard.astro';
 import { renderReply } from '@/lib/markdown';
+import type { Recommendation } from '@/lib/types';
 
 interface Props {
   role: 'user' | 'assistant';
   text?: string;
+  recommendations?: readonly Recommendation[];
+  /** Ids de los favoritos de quien mira, para pintar «Guardada». */
+  favoriteIds?: readonly string[];
 }
 
-const { role, text = '' } = Astro.props;
+const { role, text = '', recommendations = [], favoriteIds = [] } = Astro.props;
 ---
 
 {
@@ -28,7 +34,7 @@ const { role, text = '' } = Astro.props;
     <li data-role="assistant" class="space-y-3">
       <p class="text-umber-amber text-[0.7rem] font-medium tracking-[0.2em] uppercase">Umber</p>
       <p data-field="status" hidden class="text-umber-ash animate-pulse text-sm motion-reduce:animate-none">
-        Buscando en el catálogo…
+        Pensando…
       </p>
       <div
         data-field="body"
@@ -50,7 +56,9 @@ const { role, text = '' } = Astro.props;
           Reintentar
         </button>
       </div>
-      <div data-field="cards" class="grid gap-3 sm:grid-cols-2" />
+      <div data-field="cards" class="grid gap-3 sm:grid-cols-2">
+        {recommendations.map((item) => <ContentCard item={item} favorite={favoriteIds.includes(item.id)} />)}
+      </div>
     </li>
   )
 }

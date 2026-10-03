@@ -11,6 +11,7 @@
 import {
   DEEPSEEK_API_KEY,
   EMBEDDINGS_API_KEY,
+  EMBEDDINGS_MODEL,
   EMBEDDINGS_URL,
   SUPABASE_PUBLISHABLE_KEY,
   SUPABASE_SECRET_KEY,
@@ -26,10 +27,15 @@ export const env = {
     apiKey: DEEPSEEK_API_KEY,
   },
   embeddings: {
-    /** Endpoint OpenAI-compatible. En local, `npm run embeddings` o el contenedor de TEI. */
+    /**
+     * Endpoint OpenAI-compatible. En producción, Cloudflare Workers AI; en local
+     * sin conexión, `npm run embeddings`.
+     */
     url: EMBEDDINGS_URL,
-    /** Opcional: solo si el servicio está autenticado. */
+    /** El token de Cloudflare. Opcional: el servidor local no pide nada. */
     apiKey: EMBEDDINGS_API_KEY,
+    /** Cómo llama el servicio a Qwen3-Embedding-0.6B: `@cf/qwen/qwen3-embedding-0.6b` en Cloudflare. */
+    model: EMBEDDINGS_MODEL,
   },
   supabase: {
     url: SUPABASE_URL,

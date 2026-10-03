@@ -1,0 +1,229 @@
+---
+/**
+ * Explorar el corpus: rejilla de carteles con búsqueda, tipo, género y orden.
+ * Todo va en la URL (`?q=&type=&genre=&sort=&page=`), así que funciona sin
+ * JavaScript y cada vista se puede compartir. La lógica está en `src/lib/explore.ts`.
+ */
+import Layout from '@/layouts/Layout.astro';
+import {
+  EXPLORE_PAGE_SIZE,
+  EXPLORE_PATH,
+  EXPLORE_SORTS,
+  exploreHref,
+  exploreSearch,
+  hasActiveFilters,
+  listExplore,
+  listGenres,
+  parseExploreFilters,
+  type ExploreFilters,
+} from '@/lib/explore';
+import { posterUrl } from '@/lib/tmdb';
+import { CHAT_MODE_DEFINITIONS, type ContentType } from '@/lib/types';
+
+const requested = parseExploreFilters(Astro.url.searchParams);
+const genres = await listGenres(requested.type);
+// Un género que no hay en este tipo (venía de otro filtro) se ignora en vez de dejar la rejilla vacía.
+const filters: ExploreFilters = genres.some((item) => item.genre === requested.genre)
+  ? requested
+  : { ...requested, genre: null };
+const { items, total } = await listExplore(filters);
+// Pasada la última página no llega ni el total: un enlace viejo vuelve a la primera.
+if (items.length === 0 && filters.page > 1) return Astro.redirect(exploreHref(filters));
+
+const pages = Math.max(1, Math.ceil(total / EXPLORE_PAGE_SIZE));
+/** Las dos primeras filas en escritorio: se ven nada más abrir, no tiene sentido diferirlas. */
+const EAGER_POSTERS = 12;
+const numberFormat = new Intl.NumberFormat('es-ES');
+const typeTabs: readonly { readonly type: ContentType | null; readonly label: string }[] = [
+  { type: null, label: 'Todo' },
+  { type: 'movie', label: 'Películas' },
+  { type: 'tv', label: 'Series' },
+];
+// La ficha lleva los filtros en su URL para que «volver» los conserve.
+const detailSearch = exploreSearch(filters);
+
+const fieldClass =
+  'bg-umber-surface border-umber-sienna/60 focus:border-umber-amber w-full rounded-lg border px-3 py-2 text-sm focus:outline-none';
+const labelClass = 'text-umber-ash text-[0.7rem] tracking-[0.15em] uppercase';
+---
+
+<Layout title="Explorar — Umber">
+  <main class="mx-auto w-full max-w-5xl flex-1 px-5 py-10">
+    <h1 class="text-3xl font-semibold">Explorar</h1>
+    <p class="text-umber-ash mt-2 max-w-xl text-sm leading-relaxed">
+      Todo lo que conoce Umber. Si no sabes qué buscar,{' '}
+      <a href="/" class="text-umber-cream underline underline-offset-4">pregúntale a él</a>.
+    </p>
+
+    <nav aria-label="Tipo" class="mt-8">
+      <ul class="flex gap-2">
+        {
+          typeTabs.map((tab) => (
+            <li>
+              <a
+                href={exploreHref(filters, { type: tab.type })}
+                aria-current={filters.type === tab.type ? 'page' : undefined}
+                class="border-umber-sienna/60 text-umber-cream/85 hover:border-umber-amber aria-[current=page]:bg-umber-amber aria-[current=page]:text-umber-base aria-[current=page]:border-umber-amber block rounded-full border px-4 py-1.5 text-sm font-medium transition-colors"
+              >
+                {tab.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+
+    <form
+      method="get"
+      action={EXPLORE_PATH}
+      data-explore-filters
+      class="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-[minmax(0,1fr)_13rem_11rem_auto] lg:items-end"
+    >
+      {filters.type !== null && <input type="hidden" name="type" value={filters.type} />}
+      <div class="col-span-2 space-y-1.5 lg:col-span-1">
+        <label for="q" class={labelClass}>Buscar</label>
+        <input
+          id="q"
+          name="q"
+          type="search"
+          value={filters.query}
+          maxlength={100}
+          placeholder="Título o director"
+          class={fieldClass}
+        />
+      </div>
+      <div class="min-w-0 space-y-1.5">
+        <label for="genre" class={labelClass}>Género</label>
+        <select id="genre" name="genre" class={fieldClass}>
+          <option value="">Todos</option>
+          {
+            genres.map((item) => (
+              <option value={item.genre} selected={item.genre === filters.genre}>
+                {item.genre}
+              </option>
+            ))
+          }
+        </select>
+      </div>
+      <div class="min-w-0 space-y-1.5">
+        <label for="sort" class={labelClass}>Orden</label>
+        <select id="sort" name="sort" class={fieldClass}>
+          {
+            Object.entries(EXPLORE_SORTS).map(([value, label]) => (
+              <option value={value} selected={value === filters.sort}>
+                {label}
+              </option>
+            ))
+          }
+        </select>
+      </div>
+      <button
+        type="submit"
+        class="bg-umber-amber text-umber-base hover:bg-umber-amber/90 col-span-2 rounded-lg px-5 py-2 text-sm font-semibold transition-colors lg:col-span-1"
+      >
+        Buscar
+      </button>
+    </form>
+
+    <div class="mt-8 flex items-baseline justify-between gap-4">
+      <p class="text-umber-ash text-sm">
+        {
+          total === 1
+            ? '1 título'
+            : `${numberFormat.format(total)} títulos`
+        }
+        {pages > 1 && ` · página ${numberFormat.format(filters.page)} de ${numberFormat.format(pages)}`}
+      </p>
+      {
+        hasActiveFilters(filters) && (
+          <a
+            href={exploreHref({ ...filters, query: '', type: null, genre: null })}
+            class="text-umber-ash hover:text-umber-cream text-sm underline underline-offset-4"
+          >
+            Quitar filtros
+          </a>
+        )
+      }
+    </div>
+
+    {
+      items.length === 0 ? (
+        <div class="border-umber-surface mt-6 rounded-xl border p-8 text-center">
+          <p class="font-display text-xl">No hay nada con esos filtros.</p>
+          <p class="text-umber-ash mt-2 text-sm">Prueba con otra palabra u otro género.</p>
+        </div>
+      ) : (
+        <ul class="mt-6 grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+          {items.map((item, index) => {
+            const poster = posterUrl(item.poster_path, 'w342');
+            return (
+              <li>
+                <a href={`${EXPLORE_PATH}/${item.id}${detailSearch}`} class="group block">
+                  <div class="bg-umber-surface ring-umber-surface group-hover:ring-umber-amber/70 group-focus-visible:ring-umber-amber relative aspect-[2/3] overflow-hidden rounded-lg ring-1 transition-shadow duration-300">
+                    {poster === null ? (
+                      <div class="text-umber-ash flex h-full items-center justify-center p-3 text-center text-xs">
+                        Sin cartel
+                      </div>
+                    ) : (
+                      <img
+                        src={poster}
+                        alt=""
+                        width="342"
+                        height="513"
+                        loading={index < EAGER_POSTERS ? 'eager' : 'lazy'}
+                        decoding="async"
+                        class="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+                      />
+                    )}
+                  </div>
+                  <p class="group-hover:text-umber-amber mt-2 line-clamp-2 text-sm leading-snug transition-colors">
+                    {item.title}
+                  </p>
+                  <p class="text-umber-ash mt-0.5 text-xs">
+                    {[item.year, CHAT_MODE_DEFINITIONS[item.type].label].filter((part) => part !== null).join(' · ')}
+                  </p>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+
+    {
+      pages > 1 && items.length > 0 && (
+        <nav aria-label="Páginas" class="mt-12 flex items-center justify-center gap-3 text-sm">
+          {filters.page > 1 ? (
+            <a
+              href={exploreHref(filters, { page: filters.page - 1 })}
+              rel="prev"
+              class="border-umber-sienna/60 hover:border-umber-amber rounded-full border px-4 py-1.5 transition-colors"
+            >
+              Anterior
+            </a>
+          ) : (
+            <span class="border-umber-surface text-umber-ash/60 rounded-full border px-4 py-1.5">Anterior</span>
+          )}
+          <span class="text-umber-ash px-2">
+            {numberFormat.format(filters.page)} / {numberFormat.format(pages)}
+          </span>
+          {filters.page < pages ? (
+            <a
+              href={exploreHref(filters, { page: filters.page + 1 })}
+              rel="next"
+              class="border-umber-sienna/60 hover:border-umber-amber rounded-full border px-4 py-1.5 transition-colors"
+            >
+              Siguiente
+            </a>
+          ) : (
+            <span class="border-umber-surface text-umber-ash/60 rounded-full border px-4 py-1.5">Siguiente</span>
+          )}
+        </nav>
+      )
+    }
+  </main>
+</Layout>
+
+<script>
+  import '@/scripts/explore';
+</script>

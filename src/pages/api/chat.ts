@@ -1,24 +1,39 @@
 /**
  * POST /api/chat — Umber responde en streaming (Server-Sent Events).
  *
- * Validar → rate limit → historial (de Supabase o del cliente) → buscar
- * candidatos → TMDB → abrir el stream de DeepSeek → responder. Todo lo que
- * puede fallar antes del primer token falla antes de devolver la respuesta,
- * para que llegue con su código HTTP. Los eventos del stream están tipados en
- * `ChatStreamEvent`.
+ * Validar → rate limit → historial (de Supabase o del cliente) → estado de la
+ * conversación → DeepSeek con la herramienta `buscar_titulos` → responder.
+ *
+ * Umber pregunta antes de buscar y busca él, con un resumen del ánimo (reglas
+ * en `src/lib/turns.ts`). En cada turno hace una de tres cosas:
+ *  - preguntar: la respuesta es texto y no se busca nada;
+ *  - buscar: llama a la herramienta; se vectoriza su resumen, se buscan y
+ *    enriquecen los candidatos, y una segunda llamada escribe la recomendación;
+ *  - recomendar «otra» de los candidatos que le quedan, que se vuelven a leer
+ *    de la base sin vectorizar.
+ *
+ * La búsqueda ocurre ya con el stream abierto, detrás de un evento `searching`
+ * para que la persona sepa qué está esperando: un fallo del buscador llega como
+ * evento `error`. Lo de antes de DeepSeek (validar, rate limit, historial) sigue
+ * fallando con su código HTTP. Los eventos están tipados en `ChatStreamEvent`.
  */
 import type { APIContext, APIRoute } from 'astro';
 
-import { publicError, readJson } from '@/lib/api';
+import { publicError, readClientAddress, readJson } from '@/lib/api';
 import { getRequestUser, type RequestUser } from '@/lib/auth';
 import {
+  SEARCH_TOOL,
   buildChatMessages,
   buildSearchQuery,
   enrichCandidates,
   extractRecommended,
+  extractTitleMentions,
   findRecommendations,
+  formatSearchResult,
   isAlreadyRecommended,
   parseChatRequest,
+  parseSearchSummary,
+  replyLanguage,
   type ChatRequest,
   type EnrichedCandidate,
 } from '@/lib/chat';
@@ -27,18 +42,37 @@ import {
   saveConversationTurn,
   type StoredConversation,
 } from '@/lib/conversations';
-import { streamChat, textDeltas, type ChunkStream } from '@/lib/deepseek';
+import {
+  streamChat,
+  turnEvents,
+  type ChatRequestOptions,
+  type ToolCall,
+  type TurnEvent,
+} from '@/lib/deepseek';
 import { AuthError, DeepSeekError, ValidationError } from '@/lib/errors';
-import { enforceChatRateLimit } from '@/lib/rate-limit';
-import { searchCandidates } from '@/lib/search';
+import { readPlatformsCache } from '@/lib/platforms';
+import { enforceRateLimit } from '@/lib/rate-limit';
+import { loadCandidates, searchCandidates, toCandidateRefs } from '@/lib/search';
+import { conversationState, toolChoiceFor } from '@/lib/turns';
 import {
   CHAT_MODE_DEFINITIONS,
-  type ChatMessage,
+  type ChatHistoryMessage,
   type ChatStreamEvent,
+  type Locale,
+  type Recommendation,
   type StoredChatMessage,
+  type TurnSearch,
 } from '@/lib/types';
 
 // ─── Preparación ─────────────────────────────────────────────────────────────
+
+/** Lo que el turno va sabiendo mientras se escribe la respuesta. */
+interface TurnOutcome {
+  /** Entre los que puede haber recomendado: los que le quedaban, o los de la búsqueda nueva. */
+  candidates: readonly EnrichedCandidate[];
+  /** La búsqueda de este turno, si la hubo. */
+  search: TurnSearch | null;
+}
 
 interface PreparedChat {
   readonly request: ChatRequest;
@@ -46,21 +80,16 @@ interface PreparedChat {
   /** La conversación guardada que se continúa, o `null` si es nueva. */
   readonly conversation: StoredConversation | null;
   /** Historial anterior al mensaje actual. */
-  readonly history: readonly ChatMessage[];
-  readonly candidates: readonly EnrichedCandidate[];
-  /** Ya abierto: si DeepSeek iba a rechazar la petición, ya lo ha hecho. */
-  readonly stream: ChunkStream;
+  readonly history: readonly ChatHistoryMessage[];
+  /** Idioma de la respuesta: el de las fichas tiene que ser el mismo. */
+  readonly language: Locale;
+  /** La respuesta de Umber según llega. La primera llamada a DeepSeek ya está abierta. */
+  readonly parts: AsyncIterable<ReplyPart>;
+  readonly outcome: TurnOutcome;
 }
 
-/** Astro lanza si el adaptador no conoce la IP. En Vercel y en `astro dev` la conoce. */
-function readClientAddress(context: APIContext): string | null {
-  try {
-    return context.clientAddress;
-  } catch {
-    console.warn('[api/chat] Petición sin IP: cuenta en el cupo compartido «ip:unknown».');
-    return null;
-  }
-}
+/** Un fragmento del texto de Umber, o el aviso de que empieza a buscar. */
+type ReplyPart = { readonly type: 'text'; readonly text: string } | { readonly type: 'searching' };
 
 /** La conversación que se continúa, o `null` si es nueva. */
 async function loadRequestedConversation(
@@ -75,6 +104,59 @@ async function loadRequestedConversation(
   return conversation;
 }
 
+/** Solo el texto de un stream: en la segunda llamada, con `tool_choice: none`, no hay más. */
+async function* textOf(events: AsyncIterable<TurnEvent>): AsyncGenerator<ReplyPart> {
+  for await (const event of events) {
+    if (event.type === 'text') yield { type: 'text', text: event.text };
+  }
+}
+
+/**
+ * Caracteres que se retienen al principio de una respuesta. Antes de buscar,
+ * Umber a veces escribe un preámbulo («Déjame ver qué tengo») y después llama a
+ * la herramienta: en 4 de 6 búsquedas de prueba. Retenido, si detrás llega la
+ * búsqueda se descarta, y la persona solo lee la recomendación. Los preámbulos
+ * medidos no pasaban de 200 caracteres; una pregunta cabe entera, y una
+ * recomendación se empieza a enviar en cuanto pasa de aquí.
+ */
+const PREAMBLE_HOLD_CHARS = 280;
+
+/**
+ * El texto de una respuesta que empezó escribiendo. Si llama a la herramienta
+ * mientras lo retenido no pasa de `PREAMBLE_HOLD_CHARS`, era un preámbulo y se
+ * descarta. Si ya se había enviado, se queda, y la recomendación va detrás.
+ */
+async function* continueText(
+  first: string,
+  rest: AsyncIterator<TurnEvent>,
+  onSearch: (call: ToolCall) => AsyncIterable<ReplyPart>,
+): AsyncGenerator<ReplyPart> {
+  let held = first;
+  let flushed = false;
+  for (;;) {
+    const next = await rest.next();
+    if (next.done === true) {
+      if (!flushed) yield { type: 'text', text: held };
+      return;
+    }
+    if (next.value.type === 'text') {
+      if (flushed) {
+        yield { type: 'text', text: next.value.text };
+      } else {
+        held += next.value.text;
+        if (held.length >= PREAMBLE_HOLD_CHARS) {
+          yield { type: 'text', text: held };
+          flushed = true;
+        }
+      }
+    } else {
+      if (flushed) yield { type: 'text', text: '\n\n' };
+      yield* onSearch(next.value.call);
+      return;
+    }
+  }
+}
+
 async function prepareChat(context: APIContext, signal: AbortSignal): Promise<PreparedChat> {
   const { request, locals } = context;
   const chat = parseChatRequest(await readJson(request), request.headers.get('accept-language'));
@@ -87,36 +169,94 @@ async function prepareChat(context: APIContext, signal: AbortSignal): Promise<Pr
   // DeepSeek). Leer la conversación no cuesta, así que va a la vez: son dos
   // viajes a Supabase de unos 120 ms cada uno, medidos desde local.
   const [, conversation] = await Promise.all([
-    enforceChatRateLimit({ userId: user?.id ?? null, clientAddress: readClientAddress(context) }),
+    enforceRateLimit('chat', { userId: user?.id ?? null, clientAddress: readClientAddress(context) }),
     loadRequestedConversation(chat, user),
   ]);
 
   // Con conversación guardada manda Supabase; sin ella, lo que el cliente tiene en memoria.
   const history = conversation?.messages ?? chat.history;
+  const state = conversationState(history);
   const recommended = extractRecommended(history);
+  const language = replyLanguage(chat.message, history, chat.locale);
 
-  const found = await searchCandidates(buildSearchQuery(history, chat.message), {
-    contentType: CHAT_MODE_DEFINITIONS[chat.mode].contentType,
-    exclude: (candidate) => isAlreadyRecommended(candidate, recommended),
-  });
-  const { candidates, saved } = await enrichCandidates(found, chat.region, signal);
-
-  // La caché de plataformas se escribe mientras DeepSeek abre el stream: no retrasa nada.
-  const [stream] = await Promise.all([
-    streamChat({
-      messages: buildChatMessages({ request: chat, history, candidates, recommended }),
-      signal,
+  // Los que le quedan de la última búsqueda, para «otra»: de la base, sin
+  // vectorizar. Su caché de plataformas solo necesita los ids: se lee a la vez.
+  const cache = readPlatformsCache(
+    state.remaining.map((ref) => ref.id),
+    signal,
+  );
+  const remaining = await enrichCandidates(await loadCandidates(state.remaining), chat.region, signal, cache);
+  const outcome: TurnOutcome = { candidates: remaining.candidates, search: null };
+  const base: ChatRequestOptions = {
+    messages: buildChatMessages({
+      request: chat,
+      history,
+      state,
+      candidates: remaining.candidates,
+      recommended,
+      language,
     }),
-    saved,
-  ]);
+    tools: [SEARCH_TOOL],
+    signal,
+  };
 
-  return { request: chat, user, conversation, history, candidates, stream };
+  /**
+   * Avisa de que busca, ejecuta `buscar_titulos` y escribe la recomendación con
+   * una segunda llamada. Embedding, base y TMDB tardan varios segundos.
+   */
+  async function* runSearch(call: ToolCall): AsyncGenerator<ReplyPart> {
+    yield { type: 'searching' };
+    const { summary } = parseSearchSummary(call.arguments, buildSearchQuery(history, chat.message));
+    const found = await searchCandidates(summary, {
+      contentType: CHAT_MODE_DEFINITIONS[chat.mode].contentType,
+      exclude: (candidate) =>
+        state.recommendedIds.has(candidate.id) || isAlreadyRecommended(candidate, recommended),
+    });
+    const enriched = await enrichCandidates(found, chat.region, signal);
+    outcome.candidates = enriched.candidates;
+    outcome.search = { summary, candidates: toCandidateRefs(found) };
+    // La caché de plataformas se escribe mientras DeepSeek abre el stream: no retrasa nada.
+    const [stream] = await Promise.all([
+      streamChat({
+        ...base,
+        toolChoice: 'none',
+        toolRound: { call, result: formatSearchResult(enriched.candidates, chat.region, language) },
+      }),
+      enriched.saved,
+    ]);
+    yield* textOf(turnEvents(stream));
+  }
+
+  const [stream] = await Promise.all([
+    streamChat({ ...base, toolChoice: toolChoiceFor(state) }),
+    remaining.saved,
+  ]);
+  // Lo primero que hace se mira antes de responder: un stream vacío de DeepSeek
+  // todavía llega con su código HTTP.
+  const events = turnEvents(stream)[Symbol.asyncIterator]();
+  const head = await events.next();
+  if (head.done === true) throw new DeepSeekError('DeepSeek cerró el stream sin texto.');
+  const parts =
+    head.value.type === 'tool_call'
+      ? runSearch(head.value.call)
+      : continueText(head.value.text, events, runSearch);
+
+  return { request: chat, user, conversation, history, language, parts, outcome };
 }
 
 // ─── Guardado ────────────────────────────────────────────────────────────────
 
-/** Guarda el turno si hay sesión. Devuelve el id de la conversación, o `null`. */
-async function persist(prepared: PreparedChat, reply: string): Promise<string | null> {
+/**
+ * Guarda el turno si hay sesión. Devuelve el id de la conversación, o `null`.
+ * La respuesta va con lo que recuerda el turno: la búsqueda, si la hubo, para
+ * sacar «otra» sin volver a buscar; los ids de lo recomendado, para no
+ * repetirlos y para que `/chat` vuelva a pintar sus fichas; y el idioma.
+ */
+async function persist(
+  prepared: PreparedChat,
+  reply: string,
+  recommendations: readonly Recommendation[],
+): Promise<string | null> {
   const { user, request, conversation } = prepared;
   if (user === null) return null;
 
@@ -138,7 +278,14 @@ async function persist(prepared: PreparedChat, reply: string): Promise<string | 
       messages: [
         ...earlier,
         { role: 'user', content: request.message, created_at: now },
-        { role: 'assistant', content: reply, created_at: now },
+        {
+          role: 'assistant',
+          content: reply,
+          created_at: now,
+          recommendation_ids: recommendations.map((item) => item.id),
+          ...(prepared.outcome.search === null ? {} : { search: prepared.outcome.search }),
+          language: prepared.language,
+        },
       ],
     });
     return id;
@@ -169,22 +316,31 @@ function streamReply(prepared: PreparedChat, abort: AbortController): ReadableSt
     async start(controller) {
       let reply = '';
       try {
-        for await (const text of textDeltas(prepared.stream)) {
-          reply += text;
-          controller.enqueue(encodeEvent({ event: 'delta', data: { text } }));
+        for await (const part of prepared.parts) {
+          if (part.type === 'searching') {
+            controller.enqueue(encodeEvent({ event: 'searching', data: {} }));
+            continue;
+          }
+          reply += part.text;
+          controller.enqueue(encodeEvent({ event: 'delta', data: { text: part.text } }));
         }
         if (reply.trim().length === 0) {
           throw new DeepSeekError('DeepSeek cerró el stream sin texto.');
         }
 
-        const conversationId = await persist(prepared, reply);
+        const { candidates, search } = prepared.outcome;
+        const recommendations = findRecommendations(reply, candidates, prepared.language);
+        // Un título en negrita que no sale de ninguna búsqueda es uno inventado.
+        // Ya se ha escrito: al menos, que se vea en el log.
+        const unknown = extractTitleMentions(reply).length - recommendations.length;
+        if (unknown > 0) {
+          console.warn(`[api/chat] Umber nombró ${String(unknown)} título(s) que no venían de una búsqueda.`);
+        }
+        const conversationId = await persist(prepared, reply, recommendations);
         controller.enqueue(
           encodeEvent({
             event: 'done',
-            data: {
-              conversation_id: conversationId,
-              recommendations: findRecommendations(reply, prepared.candidates),
-            },
+            data: { conversation_id: conversationId, recommendations, search },
           }),
         );
       } catch (error: unknown) {

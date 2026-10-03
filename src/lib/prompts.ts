@@ -21,10 +21,11 @@ const USER_CONTEXT_TEMPLATE = stripComments(userContextSource);
 export interface UserContextValues {
   readonly mode: string;
   readonly mode_label: string;
-  readonly locale: string;
+  readonly reply_language: string;
   readonly region: string;
   readonly today: string;
   readonly user_message: string;
+  readonly conversation_state: string;
   readonly candidates: string;
   readonly already_recommended: string;
 }

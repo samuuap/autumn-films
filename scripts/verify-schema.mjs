@@ -1,6 +1,6 @@
 /**
  * Verifica que el esquema esté aplicado y que RLS se comporte: el de la Fase 2
- * y lo que añadió la 4 (caché de plataformas y rate limiting).
+ * lo que añadió la 4 (caché de plataformas y rate limiting), los perfiles y explorar.
  *
  *   node scripts/verify-schema.mjs
  *
@@ -54,7 +54,7 @@ console.log(`\nProyecto: ${env.SUPABASE_URL}\n`);
 
 // ─── Estructura ──────────────────────────────────────────────────────────────
 console.log('Estructura');
-for (const table of ['content', 'users_favorites', 'conversations', 'platforms_cache', 'rate_limits']) {
+for (const table of ['content', 'users_favorites', 'conversations', 'profiles', 'platforms_cache', 'rate_limits']) {
   const { status, body } = await call(`/${table}?select=*&limit=0`, { key: SECRET });
   record(status === 200, `tabla ${table} existe`, status === 200 ? '' : JSON.stringify(body));
 }
@@ -67,6 +67,9 @@ for (const table of ['content', 'users_favorites', 'conversations', 'platforms_c
   });
   record(status === 200, 'search_content responde a un vector de 1024 dim',
     status === 200 ? `${Array.isArray(body) ? body.length : '?'} filas` : JSON.stringify(body));
+  const first = Array.isArray(body) ? body[0] : null;
+  record(first !== null && first !== undefined && 'title_en' in first && 'synopsis_en' in first,
+    'search_content devuelve title_en y synopsis_en', first ? Object.keys(first).join(', ') : 'sin filas');
 }
 
 {
@@ -91,7 +94,7 @@ console.log('\nRow Level Security');
   });
   record(status === 401 || status === 403, 'anon NO puede escribir en el corpus', `HTTP ${status}`);
 }
-for (const table of ['conversations', 'users_favorites']) {
+for (const table of ['conversations', 'users_favorites', 'profiles']) {
   const { status, body } = await call(`/${table}?select=id&limit=1`);
   const blocked = status === 200 && Array.isArray(body) && body.length === 0;
   record(blocked || status === 401 || status === 403,
@@ -109,6 +112,34 @@ for (const table of ['platforms_cache', 'rate_limits']) {
   // 404 si no existe: lo descarta la comprobación de la secret key, más abajo.
   record(status === 401 || status === 403 || status === 404,
     'anon NO puede llamar a hit_rate_limit (gastaría el cupo de otra IP)', `HTTP ${status}`);
+}
+{
+  const { status, body } = await call('/rpc/explore_content', {
+    method: 'POST', body: { p_query: 'otono', p_limit: 5 },
+  });
+  const first = Array.isArray(body) ? body[0] : null;
+  record(status === 200 && Array.isArray(body) && body.length > 0 && typeof first?.total_count === 'number',
+    'anon puede explorar el corpus, y «otono» encuentra «otoño»',
+    status === 200 ? `${body.length} filas, total ${first?.total_count}` : JSON.stringify(body));
+}
+{
+  const { status, body } = await call('/rpc/content_genres', { method: 'POST', body: {} });
+  record(status === 200 && Array.isArray(body) && body.length > 0,
+    'anon puede listar los géneros', status === 200 ? `${body.length} géneros` : JSON.stringify(body));
+}
+{
+  const { status, body } = await call('/rpc/is_username_available', {
+    method: 'POST', body: { p_username: '__verify__nadie' },
+  });
+  record(status === 200 && body === true,
+    'anon puede preguntar si un nombre de usuario está libre', `HTTP ${status} → ${JSON.stringify(body)}`);
+}
+{
+  const { status } = await call('/rpc/append_conversation_messages', {
+    method: 'POST', body: { p_id: '00000000-0000-0000-0000-000000000000', p_messages: [] },
+  });
+  record(status === 401 || status === 403 || status === 404,
+    'anon NO puede llamar a append_conversation_messages', `HTTP ${status}`);
 }
 
 // ─── Restricciones ───────────────────────────────────────────────────────────
@@ -166,6 +197,24 @@ const seed = (tmdb_id, type) => ({ tmdb_id, type, title: `__verify__ ${type}` })
     );
     record(modes.every((m) => m.status === 201),
       'los modos weekend y month de la v2 son válidos en el esquema');
+
+    // Lo que la función arregla: leer y reescribir el array perdía turnos con
+    // peticiones simultáneas. Diez a la vez tienen que dejar diez mensajes más.
+    const appends = await Promise.all(Array.from({ length: 10 }, (_, i) =>
+      call('/rpc/append_conversation_messages', {
+        method: 'POST', key: SECRET,
+        body: { p_id: row.id, p_messages: [{ role: 'user', content: `a la vez ${i}` }] },
+      })));
+    const after10 = await call(`/conversations?select=messages&id=eq.${row.id}`, { key: SECRET });
+    const length = Array.isArray(after10.body) ? after10.body[0]?.messages?.length : null;
+    record(appends.every((a) => a.body === true) && length === 11,
+      'append_conversation_messages no pierde turnos con 10 a la vez', `${length} mensajes (esperados 11)`);
+
+    const notArray = await call('/rpc/append_conversation_messages', {
+      method: 'POST', key: SECRET, body: { p_id: row.id, p_messages: { role: 'user' } },
+    });
+    record(notArray.status >= 400, 'append_conversation_messages rechaza lo que no es un array',
+      `HTTP ${notArray.status}`);
   }
 }
 

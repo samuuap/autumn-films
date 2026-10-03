@@ -5,9 +5,19 @@
  * Las constantes están medidas con el corpus real; las medidas y su motivo están
  * en `docs/fase-4-api-chat.md`.
  */
+import { isRecord, parseText } from '@/lib/api';
 import { embedQuery, toPgVector } from '@/lib/embeddings';
+import { ValidationError } from '@/lib/errors';
 import { getSupabaseClient, unwrap } from '@/lib/supabase';
-import type { ContentCandidate, ContentType } from '@/lib/types';
+import { posterUrl } from '@/lib/tmdb';
+import {
+  MAX_MESSAGE_CHARS,
+  MAX_SEARCH_RESULTS,
+  type ContentCandidate,
+  type ContentType,
+  type SearchCandidateRef,
+  type SearchResult,
+} from '@/lib/types';
 
 /**
  * Suelo de similitud, no un umbral de «encaja». Con este modelo la similitud no
@@ -26,15 +36,19 @@ export const SEARCH_MIN_SIMILARITY = 0.3;
 /** `min_score` que se pasa a `search_content`: ninguno, ver `SEARCH_MIN_SIMILARITY`. */
 const NO_DATABASE_THRESHOLD = -1;
 
-/** Candidatos que se piden a la base para reordenar. `search_content` corta en 50. */
-export const SEARCH_POOL_SIZE = 30;
+/**
+ * Candidatos que se piden a la base para reordenar. `search_content` corta en
+ * 50. Es también el tope de `/api/search`: más allá no hay nada reordenado.
+ */
+export const SEARCH_POOL_SIZE = MAX_SEARCH_RESULTS;
 
 /**
- * Peso de `autumn_score` al reordenar. Con 0,1 cambian entre 0 y 5 de los 10
- * primeros, y entran títulos que estaban entre el 11.º y el 26.º. Moderado a
- * propósito: el score tiene ruido de ±0,1 a ±0,4 en su franja media.
+ * Peso de `autumn_score` al reordenar. Con 0,2, frente a 0,1, cambian entre 0 y
+ * 3 de los 10 primeros: su otoño medio sube de 0,58 a 0,61 y la similitud solo
+ * baja de 0,437 a 0,434 (12 consultas). Era 0,1 mientras el score salía de una
+ * sola pasada, con ruido de ±0,1 a ±0,4; ahora es la media de tres.
  */
-export const AUTUMN_WEIGHT = 0.1;
+export const AUTUMN_WEIGHT = 0.2;
 
 /** Candidatos que se pasan al modelo por defecto. */
 export const DEFAULT_CANDIDATE_COUNT = 10;
@@ -59,31 +73,10 @@ function rankScore(candidate: ContentCandidate): number {
 }
 
 /**
- * `search_content` solo devuelve la sinopsis española, y 27 títulos del corpus
- * no la tienen. Sin sinopsis, el modelo tendría que imaginarse la película.
+ * Vectoriza `query` como consulta, busca en el corpus y devuelve los mejores
+ * reordenados. `search_content` trae las dos sinopsis: 65 títulos no tienen la
+ * española, y sin ninguna el modelo tendría que imaginarse la película.
  */
-async function fillMissingSynopses(candidates: RankedCandidate[]): Promise<RankedCandidate[]> {
-  const missing = candidates.filter((candidate) => candidate.synopsis === null);
-  if (missing.length === 0) return candidates;
-
-  const rows = unwrap(
-    await getSupabaseClient()
-      .from('content')
-      .select('id, synopsis_en')
-      .in(
-        'id',
-        missing.map((candidate) => candidate.id),
-      ),
-  );
-  const english = new Map(rows.map((row) => [row.id, row.synopsis_en]));
-  return candidates.map((candidate) =>
-    candidate.synopsis === null
-      ? { ...candidate, synopsis: english.get(candidate.id) ?? null }
-      : candidate,
-  );
-}
-
-/** Vectoriza `query` como consulta, busca en el corpus y devuelve los mejores reordenados. */
 export async function searchCandidates(
   query: string,
   options: SearchOptions,
@@ -97,15 +90,107 @@ export async function searchCandidates(
       min_score: NO_DATABASE_THRESHOLD,
       ...(options.contentType === null ? {} : { content_type: options.contentType }),
     }),
-  ) as ContentCandidate[];
+  );
 
   const exclude = options.exclude;
-  const ranked = rows
+  return rows
+    // `type` sale como string del generador: se comprueba en vez de suponerlo.
+    .flatMap((row): ContentCandidate[] =>
+      row.type === 'movie' || row.type === 'tv' ? [{ ...row, type: row.type }] : [],
+    )
     .filter((candidate) => candidate.similarity >= SEARCH_MIN_SIMILARITY)
     .filter((candidate) => exclude === undefined || !exclude(candidate))
     .map((candidate) => ({ ...candidate, rank_score: rankScore(candidate) }))
     .sort((a, b) => b.rank_score - a.rank_score)
     .slice(0, options.limit ?? DEFAULT_CANDIDATE_COUNT);
+}
 
-  return fillMissingSynopses(ranked);
+/** Cómo se recuerda una búsqueda en la conversación: solo ids y similitud, en su orden. */
+export function toCandidateRefs(candidates: readonly RankedCandidate[]): SearchCandidateRef[] {
+  return candidates.map(({ id, similarity }) => ({ id, similarity }));
+}
+
+/**
+ * Los candidatos de una búsqueda anterior, leídos de nuevo del corpus: es lo que
+ * permite sacar «otra» sin volver a vectorizar. Mantienen el orden en que
+ * salieron; uno que ya no está en el corpus se pierde.
+ */
+export async function loadCandidates(
+  refs: readonly SearchCandidateRef[],
+): Promise<RankedCandidate[]> {
+  if (refs.length === 0) return [];
+  const rows = unwrap(
+    await getSupabaseClient()
+      .from('content')
+      .select(
+        'id, tmdb_id, type, title, title_en, year, director, synopsis, synopsis_en, genres, autumn_score, poster_path',
+      )
+      .in(
+        'id',
+        refs.map((ref) => ref.id),
+      ),
+  );
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return refs.flatMap((ref) => {
+    const row = byId.get(ref.id);
+    // `type` sale como string del generador; el CHECK de la tabla garantiza el valor.
+    if (row === undefined || (row.type !== 'movie' && row.type !== 'tv')) return [];
+    const candidate: ContentCandidate = { ...row, type: row.type, similarity: ref.similarity };
+    return [{ ...candidate, rank_score: rankScore(candidate) }];
+  });
+}
+
+// ─── POST /api/search ────────────────────────────────────────────────────────
+
+export interface SearchRequest {
+  readonly query: string;
+  readonly contentType: ContentType | null;
+  readonly limit: number;
+}
+
+/** Valida el cuerpo de `POST /api/search` (`SearchRequestBody`). */
+export function parseSearchRequest(body: unknown): SearchRequest {
+  if (!isRecord(body)) {
+    throw new ValidationError('La petición tiene que ser un objeto JSON.');
+  }
+
+  const type = body['type'];
+  if (type !== undefined && type !== 'movie' && type !== 'tv') {
+    throw new ValidationError('El tipo tiene que ser «movie» o «tv».');
+  }
+
+  const limit = body['limit'];
+  if (
+    limit !== undefined &&
+    (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > MAX_SEARCH_RESULTS)
+  ) {
+    throw new ValidationError(
+      `El límite tiene que ser un número entero de 1 a ${String(MAX_SEARCH_RESULTS)}.`,
+    );
+  }
+
+  return {
+    // Masculino: los mensajes de `parseText` dicen «está vacío».
+    query: parseText(body['query'], MAX_MESSAGE_CHARS, 'el texto de búsqueda'),
+    contentType: type ?? null,
+    limit: limit ?? DEFAULT_CANDIDATE_COUNT,
+  };
+}
+
+export function toSearchResult(candidate: RankedCandidate): SearchResult {
+  return {
+    id: candidate.id,
+    tmdb_id: candidate.tmdb_id,
+    type: candidate.type,
+    title: candidate.title,
+    title_en: candidate.title_en,
+    year: candidate.year,
+    director: candidate.director,
+    genres: candidate.genres ?? [],
+    synopsis: candidate.synopsis ?? candidate.synopsis_en,
+    poster_url: posterUrl(candidate.poster_path),
+    similarity: candidate.similarity,
+    autumn_score: candidate.autumn_score,
+    rank_score: candidate.rank_score,
+  };
 }

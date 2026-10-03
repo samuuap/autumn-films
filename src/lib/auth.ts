@@ -17,6 +17,43 @@ import {
 export interface SessionUser {
   readonly id: string;
   readonly email: string | null;
+  /** `null` en las cuentas anteriores al nombre de usuario. */
+  readonly username: string | null;
+}
+
+export const MIN_PASSWORD_CHARS = 8;
+/** El límite de bcrypt, que es el que aplica Supabase Auth. */
+export const MAX_PASSWORD_CHARS = 72;
+/** El mismo formato que exige el `CHECK` de `profiles.username`. */
+export const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/u;
+/** Para el `pattern` del input: admite mayúsculas porque el servidor las pasa a minúsculas. */
+export const USERNAME_INPUT_PATTERN = '[A-Za-z0-9_]{3,20}';
+
+export type AuthFormField = 'username' | 'email' | 'password' | 'password_confirm';
+
+export interface AuthFormError {
+  readonly message: string;
+  /** El campo al que se refiere, para pintarlo junto a él; `null`, arriba del formulario. */
+  readonly field: AuthFormField | null;
+}
+
+export function normalizeUsername(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/**
+ * Si el nombre ya es de alguien. Un registro con un nombre cogido falla con un
+ * error genérico de base de datos (lo rechaza el UNIQUE de `profiles`); esto
+ * dice si fue por eso. Si no se puede saber, `false`: mejor el mensaje genérico
+ * que uno falso.
+ */
+export async function isUsernameTaken(supabase: UmberSupabaseClient, username: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('is_username_available', { p_username: username });
+  if (error !== null) {
+    console.warn('[auth] No se ha podido comprobar el nombre de usuario:', error.message);
+    return false;
+  }
+  return !data;
 }
 
 export interface RequestUser {
@@ -37,7 +74,13 @@ export async function getSessionUser(supabase: UmberSupabaseClient): Promise<Ses
     if (claims === undefined || typeof claims.sub !== 'string' || claims.sub.length === 0) {
       return null;
     }
-    return { id: claims.sub, email: typeof claims.email === 'string' ? claims.email : null };
+    // Los triggers de `profiles` lo mantienen igual que en la tabla: no hace falta consultarla.
+    const username: unknown = claims.user_metadata?.['username'];
+    return {
+      id: claims.sub,
+      email: typeof claims.email === 'string' ? claims.email : null,
+      username: typeof username === 'string' ? username : null,
+    };
   } catch (error: unknown) {
     // Una cookie corrupta o un refresh token revocado no tumban la página: se
     // sigue como anónimo, que es lo que la persona tiene que ver.

@@ -1,12 +1,12 @@
 /**
- * Generación de embeddings con Qwen3-Embedding servido localmente.
+ * Generación de embeddings con Qwen3-Embedding-0.6B.
  *
- * DeepSeek no expone endpoint de embeddings, así que la vectorización va contra
- * un servidor propio. Se habla con él por la API de embeddings de OpenAI, que es
- * la que exponen tanto Text Embeddings Inference como vLLM: cambiar de local a un
- * endpoint gestionado es cambiar `EMBEDDINGS_URL`, nada más.
- *
- * Levantar el modelo en local: `npm run embeddings` (ver README).
+ * DeepSeek no expone endpoint de embeddings. Se habla con el servicio por la API
+ * de embeddings de OpenAI, que exponen Cloudflare Workers AI (producción), el
+ * servidor local de `npm run embeddings`, Text Embeddings Inference y vLLM:
+ * cambiar de uno a otro es cambiar `EMBEDDINGS_URL`, `EMBEDDINGS_API_KEY` y
+ * `EMBEDDINGS_MODEL`. Antes, `scripts/seed/check-embeddings.py` comprueba que
+ * el nuevo da los mismos vectores que indexaron el corpus.
  *
  * Las consultas se vectorizan aquí; el corpus, en `scripts/seed/embed.py`. La
  * normalización y la instrucción están duplicadas en `scripts/seed/common.py` y
@@ -18,6 +18,11 @@ import OpenAI from 'openai';
 import { env } from '@/lib/env';
 import { EmbeddingError, ValidationError, toError } from '@/lib/errors';
 
+/**
+ * El modelo que indexó el corpus. Cada servicio lo llama a su manera
+ * (`@cf/qwen/qwen3-embedding-0.6b` en Cloudflare): el nombre que se pide va en
+ * `EMBEDDINGS_MODEL`, y por defecto es este.
+ */
 export const EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-0.6B';
 
 /**
@@ -50,10 +55,12 @@ function getEmbeddingsClient(): OpenAI {
     baseURL: env.embeddings.url,
     // En local no hay autenticación, pero el SDK exige un valor no vacío.
     apiKey: env.embeddings.apiKey ?? 'local',
-    // Vectorizar una consulta tarda milisegundos. El SDK espera por defecto 10
-    // minutos y reintenta dos veces: con el servicio colgado, el chat se quedaría
-    // mudo en vez de decir que el buscador no responde.
-    timeout: 10_000,
+    // En Cloudflare, una consulta tarda 1,2 s de mediana, pero con picos: en una
+    // hora, el 10 % pasó de 5,8 s y la más lenta llegó a 11,7 s (sin ningún
+    // error). 15 s deja pasar los picos. El SDK espera por defecto 10 minutos y
+    // reintenta dos veces: con el servicio colgado, el chat se quedaría mudo en
+    // vez de decir que el buscador no responde.
+    timeout: 15_000,
     maxRetries: 1,
   });
   return client;
@@ -88,7 +95,7 @@ async function embed(inputs: readonly string[]): Promise<number[][]> {
 
   try {
     const response = await getEmbeddingsClient().embeddings.create({
-      model: EMBEDDING_MODEL,
+      model: env.embeddings.model,
       input: [...inputs],
     });
 
@@ -109,8 +116,8 @@ async function embed(inputs: readonly string[]): Promise<number[][]> {
 }
 
 /**
- * Vectoriza el mensaje del usuario para buscar en el corpus. Aplica la
- * instrucción de tarea: usar esta función, no `embedDocuments`, en el chat.
+ * Vectoriza el mensaje del usuario para buscar en el corpus, con la instrucción
+ * de tarea. El corpus se vectoriza sin ella, en `scripts/seed/embed.py`.
  */
 export async function embedQuery(text: string): Promise<number[]> {
   const normalized = normalizeForEmbedding(text);
@@ -119,14 +126,6 @@ export async function embedQuery(text: string): Promise<number[]> {
     throw new EmbeddingError('El servicio de embeddings no devolvió ningún vector.');
   }
   return vector;
-}
-
-/**
- * Vectoriza textos del corpus (sinopsis + keywords), sin instrucción. Lo usan
- * los scripts de seed y cualquier indexado posterior.
- */
-export async function embedDocuments(texts: readonly string[]): Promise<number[][]> {
-  return embed(texts.map(normalizeForEmbedding));
 }
 
 /**

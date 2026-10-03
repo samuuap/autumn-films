@@ -1,8 +1,7 @@
 # Fase 5 — Frontend
 
-**Estado:** 🔄 En curso — código completo; falta configurar las URLs de auth en
-Supabase y probar un registro con un email real
-**Depende de:** [Fase 4](fase-4-api-chat.md) 🔄 — la UI consume `/api/chat`, que ya funciona
+**Estado:** ✅ Completada — la configuración de auth en Supabase pasa a la Fase 6
+**Depende de:** [Fase 4](fase-4-api-chat.md) ✅ — la UI consume `/api/chat`
 **Actualizado:** 2026-09-30
 
 ## Objetivo
@@ -35,7 +34,11 @@ la ficha de lo que recomienda y poder guardarlo.
 - [x] Sin sesión, el historial va en memoria y viaja en cada petición. Con sesión,
       tras el primer turno la URL pasa a `?conversation=<id>`: recargar retoma la
       conversación en vez de empezar otra
-- [x] «Buscando en el catálogo…» hasta el primer fragmento
+- [x] «Pensando…» hasta el primer fragmento y, desde el 2026-10-03, «Buscando
+      títulos que encajen…» mientras busca (evento `searching`): son unos 4 s
+- [x] El texto se repinta como mucho una vez por fotograma
+      (`requestAnimationFrame`): cada repintado rehace el HTML de toda la
+      respuesta y mide la página, y los fragmentos llegan más deprisa
 - [x] Errores con «Reintentar», que reutiliza la respuesta fallida sin duplicar el
       mensaje. «Detener» corta la generación (el servidor deja de pagar tokens) y
       también ofrece reintentar
@@ -72,6 +75,9 @@ la ficha de lo que recomienda y poder guardarlo.
 - [x] `/favoritos`, con plataformas pedidas a TMDB desde el servidor
 - [x] `/conversaciones`, las 50 más recientes, sin cargar los mensajes enteros
       (`messages->0->>content`)
+- [x] Borrar una conversación desde `/conversaciones` (2026-10-03): formulario
+      POST a la propia página, que funciona sin JavaScript; con él, pide
+      confirmación. RLS decide qué se puede borrar
 
 ### Componentes
 
@@ -81,28 +87,47 @@ la ficha de lo que recomienda y poder guardarlo.
 
 ## Pendiente
 
-### Configuración en Supabase (una vez, en el dashboard)
+### Configuración de auth en Supabase
 
-- [ ] **Authentication → URL Configuration**: *Site URL* con la URL de la app, y
-      en *Redirect URLs* `http://localhost:4321/auth/confirm` y la de producción.
-      Sin esto, el enlace del email de confirmación vuelve a `localhost:3000`
-- [ ] Opcional: cambiar la plantilla *Confirm signup* a
-      `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`. Con
-      la plantilla por defecto, el enlace solo funciona en el navegador donde la
-      persona se registró
-- [ ] Probar un registro de punta a punta con un email real. No se ha hecho aquí
-      a propósito: registrar emails inventados hace rebotar el SMTP por defecto de
-      Supabase, que limita los envíos y castiga los rebotes
+Movida a la [Fase 6](fase-6-pulido-despliegue.md), en «Despliegue»: depende del
+dominio de producción, y no se configura `localhost` en el proyecto de
+producción.
 
 ### Mejoras vistas al probar
 
-- [ ] Una conversación retomada muestra el texto pero no las fichas: la
-      conversación guardada no recuerda qué títulos eran. Se arregla guardando los
-      ids recomendados en cada mensaje del asistente
-- [ ] Sin sesión, pulsar «Entrar» en la cabecera en mitad de una charla la
-      pierde, porque solo vive en memoria. Las fichas abren el login en otra
-      pestaña por eso mismo; la cabecera no
+- [x] **Una conversación retomada vuelve con sus fichas** (2026-09-30). Cada
+      mensaje de Umber se guarda con `recommendation_ids` y `language`; `/chat`
+      los carga con `loadRecommendations()` (`src/lib/recommendations.ts`): una
+      consulta al corpus para toda la conversación y plataformas por la caché,
+      que pueden haber cambiado desde la recomendación
+- [x] **«Entrar» sin sesión ya no pierde la charla**: con algo hablado, cualquier
+      enlace a `/entrar` se abre en otra pestaña, como el de las fichas. Sin nada
+      hablado navega como siempre
+- [x] **Registro más completo** (2026-10-03): nombre de usuario, la contraseña
+      dos veces y «Mostrar» en cada contraseña, también en el login. El nombre
+      es único (tabla `profiles`, migración `20261003120000`) y sale en la
+      cabecera como `@nombre`. Los errores de un campo salen junto a él. Sin
+      JavaScript todo sigue funcionando salvo «Mostrar» y el aviso al momento
+- [x] **Explorar** (2026-10-03): pestaña en la cabecera, con sesión y sin ella.
+      `/explorar` enseña el corpus en carteles, 36 por página, con búsqueda por
+      título o director (sin tildes), Todo/Películas/Series, género y orden
+      (más otoñales, más recientes, título). `/explorar/<id>` es la ficha:
+      fondo, cartel, sinopsis, duración o temporadas, plataformas y favorito.
+      Todo va en la URL, así que funciona sin JavaScript y se puede compartir;
+      la ficha lleva los filtros y «← Explorar» vuelve a ellos. Migración
+      `20261003150000`. Probado en Chromium (escritorio e iPhone 13), 27 de 27
+- [ ] **Entrar con Google**: decidido, pendiente de hacer. Hará falta:
+  - Un cliente OAuth en Google Cloud y activar el proveedor en Supabase
+    (Authentication → Providers), con el *callback* que da el dashboard
+  - `signInWithOAuth({ provider: 'google', options: { redirectTo:
+    '<origen>/auth/confirm?next=…' } })`. `/auth/confirm` ya canjea el `?code=`
+  - La cuenta llega **sin nombre de usuario** (`profiles.username` a null): una
+    pantalla para elegirlo la primera vez, con `updateUser({ data: { username } })`,
+    que los triggers ya copian a `profiles`
 - [ ] Recuperar la contraseña: no estaba en el alcance de la fase
+- [ ] Quien inicia sesión a mitad de charla guarda los turnos anteriores sin
+      fichas: el navegador solo manda el texto del historial, no los ids. Al
+      retomar esa conversación, las respuestas de antes de entrar salen sin ficha
 
 ## Decisiones tomadas
 
@@ -119,6 +144,11 @@ la ficha de lo que recomienda y poder guardarlo.
 | El mensaje del usuario y el texto de Umber se pintan con `textContent` y con `renderReply`, que escapa antes de formatear | El texto de un LLM no es HTML de confianza |
 | Las fichas sin sesión enlazan al login en otra pestaña | La charla sin cuenta vive en memoria: navegar la perdería. Tras entrar en la otra pestaña, el siguiente mensaje ya va con sesión y el endpoint guarda también lo anterior |
 | Favoritos: quitar uno no lo borra de la lista hasta recargar | Deshacer un clic por error es volver a pulsar |
+| **Nombre de usuario en `profiles`, copiado de los metadatos de Auth por triggers** | En los metadatos no hay unicidad; en una tabla sí. Con triggers, metadatos y tabla no divergen: la cabecera lo lee de la sesión sin consultar nada, y un nombre cogido hace fallar el alta entera, sin carreras. Sin comprobarlo antes de registrar: el registro repetido de una cuenta sin confirmar lo daría por cogido |
+| **Explorar se pinta en el servidor con los filtros en la URL** | Funciona sin JavaScript, cada vista se puede compartir y «volver» es un enlace. Con 5.000 títulos, una página de 36 tarda ~100–300 ms |
+| La búsqueda de explorar, en SQL (`explore_content`) y no con filtros de PostgREST | Tiene que ignorar tildes, y el texto del usuario va como parámetro en vez de escaparlo dentro de un `or=(…)` |
+| Explorar no usa la búsqueda semántica | Para eso está Umber: explorar es el catálogo, por título, tipo y género |
+| Un género que no existe en el tipo elegido se ignora | Al pasar de Series a Películas con un género solo de series, mejor el listado entero que una rejilla vacía |
 | Formularios de auth sin JavaScript, procesados en la propia página | Menos código, y `checkOrigin` de Astro (activo por defecto) rechaza los POST de otros sitios |
 
 ## Preguntas abiertas
@@ -148,3 +178,8 @@ escritorio (1280 px) y móvil (iPhone 13):
       imágenes de `image.tmdb.org`
 - [x] Sin errores de JavaScript en consola; typecheck y build limpios; ni el
       system prompt ni secretos en los estáticos del build
+- [x] **Mejoras del 2026-09-30**, 8 de 8 en Chromium: al recargar, cada
+      respuesta vuelve con sus fichas (la española con el título en español, la
+      inglesa en inglés) y con plataformas; «Guardar» funciona desde una ficha
+      retomada y persiste; sin sesión y con charla, «Entrar» abre otra pestaña y la
+      charla sigue; sin charla, navega en la misma

@@ -15,8 +15,12 @@ import { UUID_PATTERN } from '@/lib/api';
 import { loadConversation, type StoredConversation } from '@/lib/conversations';
 import { NotFoundError } from '@/lib/errors';
 import { listFavoriteIds } from '@/lib/favorites';
+import { regionFromAcceptLanguage } from '@/lib/locale';
+import { loadRecommendations } from '@/lib/recommendations';
+import { TMDB_DEFAULT_REGION } from '@/lib/tmdb';
 import {
   CHAT_MODE_DEFINITIONS,
+  DEFAULT_LOCALE,
   MAX_MESSAGE_CHARS,
   isAvailableChatMode,
   type ChatMode,
@@ -44,21 +48,35 @@ if (!isAvailableChatMode(modeParam)) return Astro.redirect('/');
 const mode: ChatMode = modeParam;
 const definition = CHAT_MODE_DEFINITIONS[mode];
 
-const favoriteIds = user === null ? [] : await listFavoriteIds(supabase);
 const messages = conversation?.messages ?? [];
+const region =
+  regionFromAcceptLanguage(Astro.request.headers.get('accept-language')) ?? TMDB_DEFAULT_REGION;
+// Las fichas de la conversación guardada: una consulta para todos sus mensajes.
+const [favoriteIds, recommendationFor] = await Promise.all([
+  user === null ? Promise.resolve([]) : listFavoriteIds(supabase),
+  loadRecommendations(
+    messages.flatMap((message) => message.recommendation_ids ?? []),
+    region,
+  ),
+]);
+const cardsOf = (message: (typeof messages)[number]) =>
+  (message.recommendation_ids ?? []).flatMap((id) => {
+    const item = recommendationFor(id, message.language ?? DEFAULT_LOCALE);
+    return item === null ? [] : [item];
+  });
 
 const SUGGESTIONS: Readonly<Record<'movie' | 'tv', readonly string[]>> = {
   movie: [
-    'Está lloviendo y estoy melancólico',
+    'Algo lento y con mucha atmósfera',
     'Quiero pasar miedo esta noche',
-    'Algo tranquilo para una tarde de domingo',
-    'Acabo de romper con mi pareja',
+    'Una tarde de domingo sin prisa',
+    'Algo que me deje pensando un rato',
   ],
   tv: [
     'Misterio en un pueblo pequeño',
     'Algo reconfortante para ver a trozos',
-    'Brujas, magia y un poco de miedo',
-    'Una historia de familia que me enganche',
+    'Brujas, folclore y algo inquietante',
+    'Una serie que enganche desde el principio',
   ],
 };
 const suggestions = mode === 'movie' || mode === 'tv' ? SUGGESTIONS[mode] : [];
@@ -108,7 +126,16 @@ const suggestions = mode === 'movie' || mode === 'tv' ? SUGGESTIONS[mode] : [];
       </div>
 
       <ol data-messages aria-live="polite" aria-busy="false" class="space-y-8">
-        {messages.map((message) => <ChatMessage role={message.role === 'user' ? 'user' : 'assistant'} text={message.content} />)}
+        {
+          messages.map((message) => (
+            <ChatMessage
+              role={message.role === 'user' ? 'user' : 'assistant'}
+              text={message.content}
+              recommendations={cardsOf(message)}
+              favoriteIds={favoriteIds}
+            />
+          ))
+        }
       </ol>
     </section>
 

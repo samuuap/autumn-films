@@ -1,16 +1,31 @@
 /**
- * Piezas del chat que no dependen de HTTP: validar la petición, construir la
- * consulta y el contexto del modelo, y reconocer qué títulos ha recomendado.
+ * Piezas del chat que no dependen de HTTP: validar la petición, construir el
+ * contexto del modelo y la herramienta con la que busca, y reconocer qué títulos
+ * ha recomendado.
  *
- * El endpoint `src/pages/api/chat.ts` solo las orquesta.
+ * Umber pregunta antes de buscar y busca él, con un resumen del ánimo: las
+ * reglas y el estado de la conversación están en `src/lib/turns.ts`. El endpoint
+ * `src/pages/api/chat.ts` solo lo orquesta.
  */
-import { UUID_PATTERN } from '@/lib/api';
+import { REGION_PATTERN, UUID_PATTERN, isRecord, parseText } from '@/lib/api';
 import { ValidationError } from '@/lib/errors';
-import { localeFromAcceptLanguage, regionFromAcceptLanguage } from '@/lib/locale';
-import { lookupPlatforms } from '@/lib/platforms';
+import {
+  detectMessageLanguage,
+  localeFromAcceptLanguage,
+  regionFromAcceptLanguage,
+} from '@/lib/locale';
+import type { ToolDefinition } from '@/lib/deepseek';
+import { lookupPlatforms, type PlatformsCache } from '@/lib/platforms';
 import { SYSTEM_PROMPT, renderUserContext } from '@/lib/prompts';
 import type { RankedCandidate } from '@/lib/search';
 import { posterUrl, TMDB_DEFAULT_REGION } from '@/lib/tmdb';
+import {
+  MAX_QUESTIONS,
+  MAX_SUMMARY_CHARS,
+  MIN_QUESTIONS,
+  parseTurnMeta,
+  type ConversationState,
+} from '@/lib/turns';
 import {
   CHAT_MODE_DEFINITIONS,
   DEFAULT_LOCALE,
@@ -18,6 +33,7 @@ import {
   MAX_MESSAGE_CHARS,
   isChatMode,
   isLocale,
+  type ChatHistoryMessage,
   type ChatMessage,
   type ChatMode,
   type ContentCandidate,
@@ -31,7 +47,10 @@ import {
 export const MAX_HISTORY_MESSAGE_CHARS = 4000;
 /** Mensajes del historial que ve el modelo: los últimos seis turnos. */
 export const HISTORY_WINDOW = 12;
-/** Mensajes del usuario que forman la consulta de búsqueda, contando el actual. */
+/**
+ * Mensajes del usuario con los que se busca si el resumen del modelo no sirve
+ * (vacío o demasiado largo), contando el actual.
+ */
 export const SEARCH_QUERY_TURNS = 3;
 /** Longitud de la sinopsis de cada candidato en el prompt. */
 const SYNOPSIS_MAX_CHARS = 400;
@@ -41,42 +60,13 @@ const SYNOPSIS_MAX_CHARS = 400;
 export interface ChatRequest {
   readonly mode: ChatMode;
   readonly message: string;
-  readonly history: readonly ChatMessage[];
+  readonly history: readonly ChatHistoryMessage[];
   readonly conversationId: string | null;
   readonly locale: Locale;
   readonly region: string;
 }
 
-const REGION_PATTERN = /^[A-Z]{2}$/u;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Quita caracteres de control salvo saltos de línea y tabuladores, y recorta. */
-function cleanText(text: string): string {
-  return text.replace(/\r\n?/gu, '\n').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/gu, '').trim();
-}
-
-/** `field` en minúscula y con artículo («el mensaje»): va en mitad y al principio de frase. */
-function parseText(value: unknown, maxChars: number, field: string): string {
-  const subject = field.charAt(0).toUpperCase() + field.slice(1);
-  if (typeof value !== 'string') {
-    throw new ValidationError(`Falta ${field}.`);
-  }
-  const text = cleanText(value);
-  if (text.length === 0) {
-    throw new ValidationError(`${subject} está vacío.`);
-  }
-  if (text.length > maxChars) {
-    throw new ValidationError(
-      `${subject} es demasiado largo: ${String(text.length)} caracteres, el máximo es ${String(maxChars)}.`,
-    );
-  }
-  return text;
-}
-
-function parseHistory(value: unknown): ChatMessage[] {
+function parseHistory(value: unknown): ChatHistoryMessage[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
     throw new ValidationError('El historial tiene que ser una lista de mensajes.');
@@ -94,6 +84,8 @@ function parseHistory(value: unknown): ChatMessage[] {
     return {
       role: item['role'],
       content: parseText(item['content'], MAX_HISTORY_MESSAGE_CHARS, 'un mensaje del historial'),
+      // Lo que recuerda cada turno de Umber: sin ello no sabría qué candidatos le quedan.
+      ...(item['role'] === 'assistant' ? parseTurnMeta(item) : {}),
     };
   });
 }
@@ -144,7 +136,7 @@ export function parseChatRequest(body: unknown, acceptLanguage: string | null): 
 // ─── Títulos mencionados ─────────────────────────────────────────────────────
 
 /** Minúsculas, sin tildes ni puntuación: «¡Olvídate de mí!» y «olvidate de mi» son iguales. */
-export function normalizeTitle(title: string): string {
+function normalizeTitle(title: string): string {
   return title
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
@@ -169,11 +161,28 @@ export function extractTitleMentions(text: string): TitleMention[] {
   }));
 }
 
+/** Vale el título en español y el inglés: Umber escribe el del idioma en que responde. */
 function mentionMatches(mention: TitleMention, candidate: ContentCandidate): boolean {
+  const mentioned = normalizeTitle(mention.title);
+  const titles = [candidate.title, candidate.title_en].flatMap((title) =>
+    title === null ? [] : [normalizeTitle(title)],
+  );
   return (
-    normalizeTitle(mention.title) === normalizeTitle(candidate.title) &&
+    titles.includes(mentioned) &&
     (mention.year === null || candidate.year === null || mention.year === candidate.year)
   );
+}
+
+/** Título en el idioma de la respuesta. El corpus siempre tiene el español; el inglés, casi siempre. */
+function titleIn(candidate: ContentCandidate, language: Locale): string {
+  return language === 'en' ? (candidate.title_en ?? candidate.title) : candidate.title;
+}
+
+/** Sinopsis en el idioma de la respuesta, o en el otro si falta: todo título tiene al menos una. */
+function synopsisIn(candidate: ContentCandidate, language: Locale): string | null {
+  return language === 'en'
+    ? (candidate.synopsis_en ?? candidate.synopsis)
+    : (candidate.synopsis ?? candidate.synopsis_en);
 }
 
 /** Lo que Umber ya ha recomendado en la conversación, sin repetir. */
@@ -202,9 +211,9 @@ export function isAlreadyRecommended(
 // ─── Búsqueda ────────────────────────────────────────────────────────────────
 
 /**
- * Texto que se vectoriza: los últimos mensajes del usuario, no solo el actual.
- * «Dame otra» o «más alegre» no dicen nada solos; junto a «está lloviendo y
- * estoy melancólico» siguen buscando en el mismo ánimo.
+ * Respaldo del resumen del modelo: los últimos mensajes del usuario, no solo el
+ * actual. «Dame otra» o «más alegre» no dicen nada solos; junto a «está
+ * lloviendo y estoy melancólico» siguen en el mismo ánimo.
  */
 export function buildSearchQuery(history: readonly ChatMessage[], message: string): string {
   const previous = history
@@ -213,6 +222,67 @@ export function buildSearchQuery(history: readonly ChatMessage[], message: strin
     .map((item) => item.content);
   return [...previous, message].join('\n');
 }
+
+/** La herramienta con la que Umber busca, cuando ya tiene claro el ánimo. */
+export const SEARCH_TOOL: ToolDefinition = {
+  name: 'buscar_titulos',
+  description:
+    'Busca en el catálogo títulos que encajen con el ánimo de la persona. Llámala cuando ya lo tengas claro, o cuando necesites títulos nuevos porque su ánimo ha cambiado o ya no te quedan candidatos.',
+  parameters: {
+    type: 'object',
+    properties: {
+      resumen: {
+        type: 'string',
+        description:
+          'El ánimo y lo que le apetece ver, en una o dos frases en inglés (el catálogo está en inglés): tono, ritmo, temas, con quién lo ve. Conserva los títulos, personas o lugares que mencione. Lo que no quiere, dilo en positivo: en vez de «nada de terror», «something calm and gentle».',
+      },
+    },
+    required: ['resumen'],
+  },
+};
+
+/**
+ * El resumen que escribió el modelo al llamar a `buscar_titulos`. Si no se
+ * puede leer, o viene vacío o desmesurado, se busca con los últimos mensajes de
+ * la persona: una búsqueda peor es mejor que un error.
+ */
+export function parseSearchSummary(args: string, fallback: string): { summary: string; fromModel: boolean } {
+  try {
+    const parsed: unknown = JSON.parse(args);
+    const summary = isRecord(parsed) && typeof parsed['resumen'] === 'string' ? parsed['resumen'].trim() : '';
+    if (summary.length > 0 && summary.length <= MAX_SUMMARY_CHARS) return { summary, fromModel: true };
+  } catch {
+    // JSON roto: vale el respaldo.
+  }
+  return { summary: fallback.slice(0, MAX_SUMMARY_CHARS), fromModel: false };
+}
+
+// ─── Idioma de la respuesta ──────────────────────────────────────────────────
+
+/**
+ * El del mensaje; si no se sabe («ok», «Interstellar»), el de los mensajes
+ * anteriores de la persona, y si tampoco, el de la interfaz.
+ *
+ * Se decide aquí y no se deja al modelo: con todo el contexto en español, a «Do
+ * you have The Godfather?» respondía en español aunque la plantilla le pedía
+ * contestar en el idioma del mensaje (2 de 2 mensajes en inglés, 2026-09-30).
+ */
+export function replyLanguage(
+  message: string,
+  history: readonly ChatMessage[],
+  interfaceLocale: Locale,
+): Locale {
+  const earlier = history
+    .filter((item) => item.role === 'user')
+    .map((item) => item.content)
+    .join('\n');
+  return detectMessageLanguage(message) ?? detectMessageLanguage(earlier) ?? interfaceLocale;
+}
+
+const LANGUAGE_NAMES: Readonly<Record<Locale, string>> = {
+  es: 'español',
+  en: 'inglés (English)',
+};
 
 // ─── Enriquecimiento con TMDB ────────────────────────────────────────────────
 
@@ -229,14 +299,16 @@ export interface Enrichment {
 
 /**
  * Añade las plataformas de cada candidato. TMDB es prescindible: si falla o
- * tarda, el candidato va sin plataformas y Umber no las menciona.
+ * tarda, el candidato va sin plataformas y Umber no las menciona. `cache`, si
+ * ya se pidió con `readPlatformsCache`.
  */
 export async function enrichCandidates(
   candidates: readonly RankedCandidate[],
   region: string,
   signal: AbortSignal,
+  cache?: Promise<PlatformsCache>,
 ): Promise<Enrichment> {
-  const { platforms, saved } = await lookupPlatforms(candidates, region, signal);
+  const { platforms, saved } = await lookupPlatforms(candidates, region, signal, cache);
   return {
     candidates: candidates.map((candidate, index) => ({
       ...candidate,
@@ -259,9 +331,19 @@ function withYear(title: string, year: number | null): string {
   return year === null ? title : `${title} (${String(year)})`;
 }
 
-/** Formato de cada candidato tal como lo documenta `user-context.md`. */
-function formatCandidate(candidate: EnrichedCandidate, index: number, region: string): string {
-  const head = [withYear(candidate.title, candidate.year)];
+/**
+ * Formato de cada candidato tal como lo documenta `user-context.md`. Título y
+ * sinopsis van en el idioma de la respuesta: el modelo copia el título tal cual,
+ * y así nombra *Always Be My Maybe* y no *Siempre queda el amor* a quien escribe
+ * en inglés.
+ */
+function formatCandidate(
+  candidate: EnrichedCandidate,
+  index: number,
+  region: string,
+  language: Locale,
+): string {
+  const head = [withYear(titleIn(candidate, language), candidate.year)];
   if (candidate.director !== null) head.push(`dir. ${candidate.director}`);
   head.push(candidate.type);
   if (candidate.genres !== null && candidate.genres.length > 0) {
@@ -277,8 +359,9 @@ function formatCandidate(candidate: EnrichedCandidate, index: number, region: st
   }
 
   const lines = [`- [${String(index + 1)}] ${head.join(' · ')}`, `      ${meta.join(' · ')}`];
-  if (candidate.synopsis !== null) {
-    lines.push(`      ${oneLine(candidate.synopsis, SYNOPSIS_MAX_CHARS)}`);
+  const synopsis = synopsisIn(candidate, language);
+  if (synopsis !== null) {
+    lines.push(`      ${oneLine(synopsis, SYNOPSIS_MAX_CHARS)}`);
   }
   return lines.join('\n');
 }
@@ -299,33 +382,103 @@ export interface ChatContext {
   readonly request: ChatRequest;
   /** Historial completo, para saber qué se ha recomendado ya. */
   readonly history: readonly ChatMessage[];
+  readonly state: ConversationState;
+  /** Los que le quedan de su última búsqueda, ya con plataformas; vacío si no ha buscado. */
   readonly candidates: readonly EnrichedCandidate[];
   readonly recommended: readonly TitleMention[];
+  /** Idioma en que responde Umber: ver `replyLanguage`. */
+  readonly language: Locale;
 }
 
-/** Los últimos turnos, empezando siempre por un mensaje del usuario. */
+/**
+ * En qué punto está la conversación, dicho al modelo. Lo que no puede hacer en
+ * este turno ya se lo impide `tool_choice`; esto es para que lo entienda y no
+ * lo intente.
+ */
+function describeState(state: ConversationState): string {
+  const questions = `Llevas ${String(state.pendingQuestions)} de ${String(MAX_QUESTIONS)} preguntas seguidas.`;
+  if (state.lastSearch === null) {
+    if (state.pendingQuestions === 0) {
+      return 'Aún no has buscado ni preguntado nada. En este turno no puedes buscar: haz tu primera pregunta para entender su ánimo.';
+    }
+    if (state.pendingQuestions < MIN_QUESTIONS) {
+      return `Aún no has buscado. ${questions} En este turno no puedes buscar: haz otra pregunta sobre algo que aún no sepas de lo que le apetece.`;
+    }
+    if (state.pendingQuestions >= MAX_QUESTIONS) {
+      return `Aún no has buscado. ${questions} Ya no puedes preguntar más: busca ahora con buscar_titulos, con lo que sabes.`;
+    }
+    return `Aún no has buscado. ${questions} Si ya tienes claro su ánimo, busca con buscar_titulos; si no, haz otra pregunta.`;
+  }
+  const last = `Tu última búsqueda fue: «${state.lastSearch.summary}».`;
+  if (state.pendingQuestions >= MAX_QUESTIONS) {
+    return `${last} ${questions} Ya no puedes preguntar más: busca ahora con buscar_titulos, con su ánimo actualizado.`;
+  }
+  if (state.remaining.length === 0) {
+    return `${last} Ya has recomendado todos sus candidatos: si quiere otra, o si su ánimo ha cambiado, busca de nuevo con buscar_titulos.`;
+  }
+  return `${last} Te quedan ${String(state.remaining.length)} candidatos de ella (abajo). Si pide otra, elige una de ellos sin buscar. Si su ánimo ha cambiado, busca de nuevo con buscar_titulos.`;
+}
+
+function formatCandidates(
+  candidates: readonly EnrichedCandidate[],
+  region: string,
+  language: Locale,
+): string {
+  return candidates.map((candidate, index) => formatCandidate(candidate, index, region, language)).join('\n');
+}
+
+/**
+ * Lo que devuelve `buscar_titulos` al modelo. Sustituye a los candidatos que le
+ * quedaban: si ha buscado, es que esos ya no le valían.
+ */
+export function formatSearchResult(
+  candidates: readonly EnrichedCandidate[],
+  region: string,
+  language: Locale,
+): string {
+  if (candidates.length === 0) {
+    return 'Ningún título del catálogo encaja con esa búsqueda. Díselo con naturalidad y pregúntale por otro ángulo de su ánimo. No nombres ninguna película.';
+  }
+  return [
+    'Candidatos del catálogo para esa búsqueda. Son los únicos que puedes recomendar ahora; los que te quedaban de antes ya no valen.',
+    'Vienen ordenados por parecido y por cuán otoñales son, pero el orden no es una recomendación: elige el que de verdad encaje.',
+    '',
+    formatCandidates(candidates, region, language),
+    '',
+    `Recomienda uno solo, en ${LANGUAGE_NAMES[language]}, con el título tal como viene arriba.`,
+  ].join('\n');
+}
+
+/**
+ * Los últimos turnos, empezando siempre por un mensaje del usuario. Al modelo
+ * solo le llegan rol y texto: los mensajes guardados llevan además fecha, ids y
+ * idioma.
+ */
 function historyWindow(history: readonly ChatMessage[]): ChatMessage[] {
   const window = history.slice(-HISTORY_WINDOW);
   const firstUser = window.findIndex((message) => message.role === 'user');
-  return firstUser === -1 ? [] : window.slice(firstUser);
+  return firstUser === -1 ? [] : window.slice(firstUser).map(({ role, content }) => ({ role, content }));
 }
 
 /** system.md + historial reciente + la plantilla rellena como último mensaje. */
 export function buildChatMessages(context: ChatContext): ChatMessage[] {
-  const { request, candidates, recommended } = context;
+  const { request, state, candidates, recommended, language } = context;
   const definition = CHAT_MODE_DEFINITIONS[request.mode];
 
   const userContext = renderUserContext({
     mode: request.mode,
     mode_label: request.locale === 'en' ? definition.labelEn : definition.label,
-    locale: request.locale,
+    reply_language: LANGUAGE_NAMES[language],
     region: request.region,
     today: new Date().toISOString().slice(0, 10),
     user_message: quote(request.message),
+    conversation_state: describeState(state),
     candidates:
-      candidates.length === 0
-        ? '(ninguno)'
-        : candidates.map((candidate, index) => formatCandidate(candidate, index, request.region)).join('\n'),
+      state.lastSearch === null
+        ? '(aún no has buscado)'
+        : candidates.length === 0
+          ? '(no te queda ninguno)'
+          : formatCandidates(candidates, request.region, language),
     already_recommended:
       recommended.length === 0
         ? '(ninguno)'
@@ -349,6 +502,7 @@ export function buildChatMessages(context: ChatContext): ChatMessage[] {
 export function findRecommendations(
   text: string,
   candidates: readonly EnrichedCandidate[],
+  language: Locale,
 ): Recommendation[] {
   const found: EnrichedCandidate[] = [];
   for (const mention of extractTitleMentions(text)) {
@@ -360,7 +514,7 @@ export function findRecommendations(
     id: candidate.id,
     tmdb_id: candidate.tmdb_id,
     type: candidate.type,
-    title: candidate.title,
+    title: titleIn(candidate, language),
     year: candidate.year,
     director: candidate.director,
     genres: candidate.genres ?? [],

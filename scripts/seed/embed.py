@@ -21,6 +21,7 @@ from common import (
     CORPUS_PATH,
     EMBEDDING_DIMENSIONS,
     EMBEDDING_MODEL,
+    EMBEDDING_SERVICE_MODEL,
     EMBEDDINGS_PATH,
     append_jsonl,
     content_key,
@@ -70,7 +71,7 @@ def main() -> None:
     for done, batch in enumerate(batches, start=1):
         try:
             response = client.embeddings.create(
-                model=EMBEDDING_MODEL, input=[text for _, text, _ in batch], encoding_format="float"
+                model=EMBEDDING_SERVICE_MODEL, input=[text for _, text, _ in batch], encoding_format="float"
             )
         except APIConnectionError as error:
             raise SystemExit(f"No hay servicio de embeddings en {url}. En local: npm run embeddings") from error

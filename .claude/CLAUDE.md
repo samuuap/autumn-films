@@ -10,7 +10,7 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 |---|---|
 | Frontend | Astro + Tailwind CSS |
 | LLM | DeepSeek-V4.1-Flash (`deepseek-flash`) |
-| Embeddings | Qwen3-Embedding-0.6B autoalojado (1024 dim, endpoint OpenAI-compatible) |
+| Embeddings | Qwen3-Embedding-0.6B (1024 dim, API de OpenAI): Cloudflare Workers AI; en local, `npm run embeddings` |
 | Base de datos | Supabase (PostgreSQL + pgvector) |
 | Auth | Supabase Auth |
 | Datos de cine | TMDB API v3 |
@@ -32,17 +32,20 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │   │   ├── index.astro      # Pantalla de inicio — selector de modo
 │   │   ├── chat.astro       # Chat: ?mode=movie para empezar, ?conversation=<id> para retomar
 │   │   ├── entrar.astro     # Login (formulario sin JS)
-│   │   ├── registro.astro   # Registro; el proyecto exige confirmar el email
+│   │   ├── registro.astro   # Registro: usuario, email y contraseña dos veces; exige confirmar el email
 │   │   ├── salir.ts         # POST: cierra la sesión de este navegador
 │   │   ├── favoritos.astro  # Favoritos, con plataformas pedidas a TMDB en servidor
-│   │   ├── conversaciones.astro  # Conversaciones guardadas
+│   │   ├── conversaciones.astro  # Conversaciones guardadas; POST para borrar una
+│   │   ├── explorar/
+│   │   │   ├── index.astro  # El corpus en carteles: búsqueda, tipo, género, orden, páginas
+│   │   │   └── [id].astro   # Ficha de un título: sinopsis, plataformas, favorito
 │   │   ├── auth/
 │   │   │   └── confirm.ts   # Vuelta del enlace del email (code o token_hash)
 │   │   └── api/
 │   │       ├── chat.ts      # Endpoint principal — orquesta búsqueda, DeepSeek y SSE
 │   │       ├── favorites.ts # POST / DELETE de favoritos
-│   │       ├── search.ts    # Búsqueda semántica en Supabase pgvector (pendiente)
-│   │       └── tmdb.ts      # Proxy para TMDB API (pendiente)
+│   │       ├── search.ts    # POST: la búsqueda del chat sin el modelo (depurar, buscador)
+│   │       └── tmdb.ts      # GET: plataformas de un título del corpus, con caché
 │   ├── lib/
 │   │   ├── env.ts           # Único acceso a variables de entorno (servidor)
 │   │   ├── env.client.ts    # Variables públicas para el navegador
@@ -53,10 +56,13 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │   │   ├── supabase.ts      # Clientes Supabase (anon / cookies / usuario / service)
 │   │   ├── tmdb.ts          # Funciones TMDB
 │   │   ├── platforms.ts     # Plataformas de TMDB con caché en Supabase (platforms_cache)
-│   │   ├── rate-limit.ts    # Límite de mensajes de /api/chat por usuario o IP
+│   │   ├── rate-limit.ts    # Límites de /api/chat y /api/search por usuario o IP
+│   │   ├── recommendations.ts # Fichas por id, para las conversaciones retomadas
+│   │   ├── explore.ts       # Filtros de /explorar en la URL, listado, géneros y ficha
 │   │   ├── embeddings.ts    # Generación de embeddings (Qwen3 autoalojado)
 │   │   ├── search.ts        # Búsqueda semántica: suelo de similitud y reordenado
 │   │   ├── chat.ts          # Validación del chat, contexto del modelo y fichas
+│   │   ├── turns.ts         # Estado de la conversación: preguntas, búsqueda, candidatos que quedan
 │   │   ├── prompts.ts       # Carga y rellena las plantillas de src/prompts/
 │   │   ├── auth.ts          # Usuario de la sesión o del token, redirecciones y errores
 │   │   ├── conversations.ts # Leer, listar y guardar conversaciones con RLS
@@ -67,7 +73,10 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 │   │   └── chat-stream.ts   # Lector del SSE de /api/chat en el navegador
 │   ├── scripts/             # JavaScript del navegador (sin framework)
 │   │   ├── chat.ts          # El chat: envío, stream, errores, fichas
-│   │   └── content-card.ts  # Rellenar fichas y botón de favorito
+│   │   ├── content-card.ts  # Rellenar fichas y botón de favorito
+│   │   ├── explore.ts       # Aplicar al momento el género y el orden de /explorar
+│   │   ├── auth-form.ts     # Mostrar la contraseña y avisar si las dos no coinciden
+│   │   └── conversations.ts # Confirmar antes de borrar una conversación
 │   ├── prompts/
 │   │   ├── system.md        # System prompt de Umber (identidad, tono, reglas)
 │   │   └── user-context.md  # Plantilla del user prompt con {{variables}}
@@ -76,14 +85,15 @@ Planificador cinematográfico otoñal con IA. Chat conversacional que recomienda
 ├── scripts/
 │   ├── verify-schema.mjs    # Comprueba esquema y RLS vía Data API
 │   ├── embeddings/
-│   │   └── server.py        # Qwen3-Embedding local con la API de OpenAI (sin Docker)
+│   │   └── server.py        # Qwen3-Embedding local con la API de OpenAI (sin conexión)
 │   └── seed/
 │       ├── common.py        # Entorno, HTTP, JSONL y el texto canónico de cada título
 │       ├── fetch-tmdb.py    # Descarga el universo de candidatos de TMDB
-│       ├── score.py         # autumn_score (heurística + deepseek-flash) y selección
+│       ├── score.py         # autumn_score (3 pasadas de deepseek-flash, media) y selección
 │       ├── embed.py         # Vectoriza el corpus con Qwen3
 │       ├── load-db.py       # Upsert del corpus en Supabase pgvector
-│       └── search.py        # Búsquedas de control contra el corpus cargado
+│       ├── search.py        # Búsquedas de control contra el corpus cargado
+│       └── check-embeddings.py  # ¿Da un servicio los mismos vectores que el corpus?
 ├── supabase/
 │   ├── config.toml          # Configuración del CLI
 │   └── migrations/          # Esquema versionado, en orden de aplicación
@@ -110,8 +120,9 @@ Una decisión que cambie el esquema o el stack va a los dos sitios.
 ```bash
 DEEPSEEK_API_KEY=          # Solo chat: DeepSeek no tiene endpoint de embeddings
 
-EMBEDDINGS_URL=            # Servidor OpenAI-compatible con Qwen3-Embedding-0.6B
-EMBEDDINGS_API_KEY=        # Solo si ese servicio está autenticado
+EMBEDDINGS_URL=            # Cloudflare Workers AI: https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1
+EMBEDDINGS_API_KEY=        # Token de Cloudflare (Workers AI Read y Edit)
+EMBEDDINGS_MODEL=          # @cf/qwen/qwen3-embedding-0.6b (el servidor local: Qwen/Qwen3-Embedding-0.6B)
 
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
@@ -157,6 +168,7 @@ python scripts/seed/score.py        # autumn_score y selección de los ~5.000
 python scripts/seed/embed.py        # vectoriza el corpus
 python scripts/seed/load-db.py      # upsert en Supabase (--prune borra lo que sobra)
 python scripts/seed/search.py "tarde de lluvia"   # búsquedas de control
+python scripts/seed/check-embeddings.py            # ¿da el servicio de .env.local los vectores del corpus?
 ```
 
 Todos los pasos cachean en `scripts/seed/data/` (ignorado en git): se reanudan
@@ -208,8 +220,11 @@ Qué contiene cada columna, tal como la rellena el seed:
   dos sinopsis
 - `genres` en español, para mostrar. `keywords` en inglés: TMDB no las traduce
 - `director`: en series, quien la crea (`created_by`), que es el equivalente
-- `autumn_score` entre 0 y 1: la puntuación de deepseek-flash (0–100) / 100.
-  Decide qué entra al corpus y sirve para reordenar candidatos en el chat
+- `autumn_score` entre 0 y 1: la media de 3 puntuaciones de deepseek-flash
+  (0–100), en lotes distintos, / 100. Decide qué entra al corpus y sirve para
+  reordenar candidatos en el chat. El criterio es **otoño antes que Halloween**:
+  Halloween cuenta si la película va de él, y el terror sin Halloween ni ambiente
+  otoñal puntúa 40 como mucho. El prompt está en `scripts/seed/score.py`
 - `embedding`: de un texto en inglés (título, sinopsis, géneros y keywords),
   con la sinopsis española solo si falta la inglesa. Lo construye
   `document_text()` en `scripts/seed/common.py`
@@ -226,6 +241,30 @@ CREATE TABLE users_favorites (
 );
 ```
 
+### `profiles`
+
+```sql
+CREATE TABLE profiles (
+  id          UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  username    TEXT UNIQUE CHECK (username ~ '^[a-z0-9_]{3,20}$'),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- true si nadie tiene ese nombre. Para anon: explica por qué falló un registro
+is_username_available(p_username TEXT) RETURNS BOOLEAN
+```
+
+- `username` es **copia** de `raw_user_meta_data->>'username'` de `auth.users`:
+  la escriben dos triggers (`sync_profile_from_auth_user`), al crearse el usuario
+  y cada vez que cambia ese dato. Por eso la app lo lee de la sesión
+  (`user_metadata` de los claims) sin consultar la tabla. Nunca escribirlo en
+  `profiles` desde la app: no hay políticas de escritura
+- Si el nombre está cogido o no cumple el formato, falla la operación de Auth
+  entera (registro o `updateUser`) con un error genérico de base de datos. Se
+  manda ya normalizado, en minúsculas (`normalizeUsername()` en `src/lib/auth.ts`)
+- Sin `username` en los metadatos (Admin API, cuentas anteriores, Google cuando
+  llegue) queda en `null`
+
 ### `conversations`
 
 ```sql
@@ -233,10 +272,16 @@ CREATE TABLE conversations (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   mode        TEXT NOT NULL CHECK (mode IN ('movie', 'tv', 'weekend', 'month')),
-  messages    JSONB NOT NULL DEFAULT '[]',
+  messages    JSONB NOT NULL DEFAULT '[]',  -- { role, content, created_at } y, en los de
+                                           -- Umber, recommendation_ids y language
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Añade al final en un solo UPDATE, con RLS de quien llama. false si no existe
+-- o es de otro usuario. Nunca leer, concatenar y reescribir `messages` desde la
+-- app: con dos peticiones a la vez se pierde un turno
+append_conversation_messages(p_id UUID, p_messages JSONB) RETURNS BOOLEAN
 ```
 
 ### Función de búsqueda semántica
@@ -249,8 +294,8 @@ CREATE OR REPLACE FUNCTION search_content(
   min_score       FLOAT DEFAULT 0.5
 )
 RETURNS TABLE (
-  id UUID, tmdb_id INTEGER, type TEXT, title TEXT,
-  year INTEGER, director TEXT, synopsis TEXT,
+  id UUID, tmdb_id INTEGER, type TEXT, title TEXT, title_en TEXT,
+  year INTEGER, director TEXT, synopsis TEXT, synopsis_en TEXT,
   genres TEXT[], autumn_score FLOAT, poster_path TEXT,
   similarity FLOAT
 )
@@ -266,6 +311,9 @@ no se ve en la firma:
   parámetros de función, así que el `VECTOR(1024)` de la firma no valida nada: un
   vector de otra dimensión entraría y la consulta devolvería 0 filas en silencio
 - Descarta las filas con `embedding IS NULL`
+- Devuelve los dos títulos y las dos sinopsis: el chat da los candidatos en el
+  idioma de la respuesta. Cambiar las columnas de `RETURNS TABLE` obliga a
+  borrarla y crearla entera (ver `20260930180000`), con todo lo de esta lista
 - Limita `match_count` a 50: está expuesta por PostgREST a `anon`
 - Lleva `SET hnsw.iterative_scan = strict_order`. Sin él, el índice HNSW devuelve
   como mucho 40 filas (`ef_search`) y el filtro por tipo se aplica después: con
@@ -278,6 +326,25 @@ no se ve en la firma:
   un timeout del rol `anon`. El chat pide con `min_score = -1` y aplica su suelo
   (0,30) en `src/lib/search.ts`; como las filas llegan ordenadas, da lo mismo
 
+### Explorar el corpus
+
+```sql
+-- Una página del listado; en cada fila, el total con esos filtros
+explore_content(p_type TEXT, p_genre TEXT, p_query TEXT,
+                p_sort TEXT DEFAULT 'autumn',  -- 'autumn' | 'recent' | 'title'
+                p_limit INT DEFAULT 36, p_offset INT DEFAULT 0)
+  RETURNS TABLE (id, type, title, title_en, year, poster_path, autumn_score, total_count)
+
+content_genres(p_type TEXT DEFAULT NULL) RETURNS TABLE (genre TEXT, titles BIGINT)
+```
+
+- `p_query` busca en el título (los dos idiomas) y en el director, **sin tildes
+  ni mayúsculas**: «otono» encuentra «Otoño». Lo hace `fold_search_text()` con
+  `translate`, no con la extensión unaccent. `%` y `_` del usuario son texto
+- Expuestas a `anon` (el corpus es público) y con `p_limit` de 60 como mucho
+- Se usan desde `src/lib/explore.ts`; sus filas pasan por `ExploreItem` en
+  `src/lib/types.ts`, por la misma razón que `search_content`
+
 ### `platforms_cache` y `rate_limits` — solo servidor
 
 ```sql
@@ -288,7 +355,7 @@ CREATE TABLE platforms_cache (
 );
 
 CREATE TABLE rate_limits (
-  key            TEXT NOT NULL,      -- 'user:<uuid>' o 'ip:<dirección>' (IPv6: su /64)
+  key            TEXT NOT NULL,      -- '<ámbito>:user:<uuid>' o '<ámbito>:ip:<dirección>' (IPv6: su /64)
   window_seconds INTEGER NOT NULL,
   window_start   TIMESTAMPTZ NOT NULL,
   expires_at     TIMESTAMPTZ NOT NULL,
@@ -305,7 +372,7 @@ hit_rate_limit(p_key TEXT, p_window_seconds INT[], p_limits INT[]) RETURNS INTEG
   `getSupabaseAdminClient()`: no son datos de ningún usuario, y abrir la función
   a la publishable key dejaría gastar el cupo de otra IP
 - `by_region` lleva **todas las regiones**, ya normalizadas por
-  `getStreamingNames()`: TMDB las manda juntas. Una región que no aparece no
+  `getStreamingNamesByRegion()`: TMDB las manda juntas. Una región que no aparece no
   tiene plataformas de suscripción ni gratis. La caducidad (3 días) la aplica
   `src/lib/platforms.ts`; una fila caducada no se borra, porque sirve de
   respaldo si TMDB no responde
@@ -317,6 +384,10 @@ hit_rate_limit(p_key TEXT, p_window_seconds INT[], p_limits INT[]) RETURNS INTEG
 
 ## Flujo del chat
 
+Umber conversa: pregunta de 2 a 4 veces para entender el ánimo, decide él cuándo
+buscar y busca con un resumen que escribe él. Si piden otra, la saca de los
+mismos 10 candidatos hasta agotarlos. Reglas y estado en `src/lib/turns.ts`.
+
 ```
 Usuario escribe
       ↓
@@ -326,40 +397,70 @@ A la vez:
   - Rate limit (hit_rate_limit): 8/min; 300/día con sesión, 60/día por IP sin ella → 429
   - Historial: de Supabase si hay conversation_id, si no el que manda el cliente
       ↓
-Embedding de los 3 últimos mensajes del usuario (Qwen3-Embedding, servicio propio)
+Estado (conversationState): preguntas seguidas, última búsqueda, candidatos que
+quedan. Idioma de la respuesta (detectMessageLanguage)
       ↓
-Búsqueda semántica en pgvector → 30 candidatos, sin los ya recomendados
+Candidatos que quedan de la última búsqueda: de la base por id, con plataformas
       ↓
-Reordenar por similitud + 0,1 × autumn_score → 10
+DeepSeek (`deepseek-flash`) con la herramienta buscar_titulos. tool_choice:
+none hasta haber preguntado 2 veces · required con 4 preguntas seguidas · auto el resto
+  ├─ texto: una pregunta, u «otra» de los que quedan → al cliente
+  └─ buscar_titulos(resumen en inglés):
+        Evento `searching` al cliente («Buscando títulos que encajen…»)
+              ↓
+        Embedding del resumen (Qwen3-Embedding, Cloudflare Workers AI)
+              ↓
+        pgvector → 30 candidatos, sin los ya recomendados
+              ↓
+        Reordenar por similitud + 0,2 × autumn_score → 10
+              ↓
+        Plataformas (platforms_cache, 3 días; si no, TMDB con 2 s de tope)
+              ↓
+        Segunda llamada a DeepSeek con los candidatos → la recomendación
       ↓
-Enriquecer con datos TMDB (plataformas: platforms_cache, 3 días; si no, TMDB
-con 2 s de tope; prescindible)
+Stream SSE al cliente (los primeros 280 caracteres se retienen: un preámbulo
+antes de buscar se descarta)
       ↓
-Llamada a DeepSeek (`deepseek-flash`), mientras se escribe la caché:
-  - system.md (Umber)
-  - Los últimos 12 mensajes de la conversación
-  - user-context.md relleno con candidatos + modo + ya recomendados
-      ↓
-Stream SSE al cliente
-      ↓
-Guardar en Supabase (si autenticado) → evento `done`
+Guardar en Supabase (si autenticado; append_conversation_messages) con search y
+recommendation_ids → evento `done`
 ```
+
+La búsqueda ocurre con el stream ya abierto, detrás del evento `searching`: la
+espera más larga del chat (unos 4 s, sobre todo el embedding de Cloudflare)
+tiene un aviso en pantalla. Por eso un fallo del buscador llega como evento
+`error`, no con su código HTTP.
 
 Contrato de `POST /api/chat`, tipado en `src/lib/types.ts`:
 
 - **Cuerpo** (`ChatRequestBody`): `mode`, `message` (≤ 1.000 caracteres) y,
   opcionales, `history` (≤ 40 mensajes `user`/`assistant`, solo sin
-  conversación guardada), `conversation_id`, `locale` y `region`
+  conversación guardada), `conversation_id`, `locale` y `region`. Los mensajes
+  de Umber del historial llevan lo que devolvió `done`: `search` y
+  `recommendation_ids`. Sin eso, el servidor no sabe qué candidatos le quedan
 - **Sesión**: la de las cookies (el navegador) o `Authorization: Bearer
   <access_token>` (scripts). Sin ninguna se chatea sin guardar; con un token
   inválido o caducado, 401
 - **Respuesta** (`ChatStreamEvent`): `text/event-stream` con `delta { text }`
-  por fragmento y, al final, `done { conversation_id, recommendations }` o
-  `error { code, message }`. `recommendations` trae la ficha de cada título que
-  Umber ha nombrado: id del corpus, póster y plataformas
-- **Errores antes del primer token**: JSON `{ error: { code, message } }` con el
-  `status` del error tipado (400, 401, 404, 429, 502). `message` se puede mostrar
-  tal cual. El 429 (`rate_limited`) lleva `Retry-After` en segundos
+  por fragmento, `searching {}` justo antes de buscar y, al final, `done {
+  conversation_id, recommendations, search }` o `error { code, message }`. `recommendations` trae la ficha de cada título que
+  Umber ha nombrado (vacío si ha preguntado): id del corpus, póster y
+  plataformas. `search` es la búsqueda del turno (resumen y candidatos), o `null`
+- **Errores antes de abrir el stream** (validar, sesión, rate limit, historial,
+  abrir DeepSeek): JSON `{ error: { code, message } }` con el `status` del error
+  tipado (400, 401, 404, 429, 502). `message` se puede mostrar tal cual. El 429
+  (`rate_limited`) lleva `Retry-After` en segundos. Lo que falla después,
+  búsqueda incluida, llega como evento `error` con el mismo `code` y `message`
+
+Los otros dos endpoints, con el mismo formato de error:
+
+- **`POST /api/search`** (`SearchRequestBody` → `SearchResponse`): `{ query,
+  type?, limit? }`, con `limit` de 1 a 30. Devuelve lo mismo que ve Umber, con
+  `similarity`, `autumn_score` y `rank_score`. Sesión opcional; rate limit
+  propio (20/min y 300/día por IP, 30/min y 1.000/día con sesión)
+- **`GET /api/tmdb?content_id=<uuid>&region=ES`** (`PlatformsResponse`):
+  plataformas de un título del corpus, por `lookupPlatforms`. Sin `region`, la de
+  `Accept-Language`. `Cache-Control` público de un día en la CDN. No acepta rutas
+  de TMDB: no es un proxy libre
 
 ---
 
@@ -384,6 +485,13 @@ Contrato de `POST /api/chat`, tipado en `src/lib/types.ts`:
   limita los envíos. Para probar, crear usuarios ya confirmados con la Admin API
   (como hace `scripts/verify-rls.mjs`) y, si hace falta un enlace, sacarlo de
   `/auth/v1/admin/generate_link`, que no envía correo
+- El registro pide **nombre de usuario**, email y la contraseña dos veces (8 a 72
+  caracteres, el tope de bcrypt). El nombre va en `signUp({ options: { data: {
+  username } } })` y acaba en `profiles` (ver el esquema). Se entra con el email
+- `AuthForm` funciona sin JavaScript; con él, añade «Mostrar» en cada contraseña
+  y el aviso de que no coinciden. Los errores de un campo salen junto a él
+  (`AuthFormError`)
+- **Pendiente: entrar con Google.** Ver `docs/fase-5-frontend.md`
 
 ---
 
@@ -448,6 +556,15 @@ Los modos `weekend` y `month` están diseñados. No eliminar sus tipos ni consta
 - Modelo: `Qwen/Qwen3-Embedding-0.6B` (1024 dim nativas, 32k de contexto, 100+ idiomas)
 - Se habla con él por la API de embeddings de OpenAI: TEI y vLLM la exponen igual,
   así que pasar de local a gestionado es cambiar `EMBEDDINGS_URL`
+- **Servicio: Cloudflare Workers AI** (`@cf/qwen/qwen3-embedding-0.6b`), gratis
+  hasta 10.000 neuronas al día (~90.000 consultas); al pasarse falla, no cobra.
+  Da los mismos vectores que el servidor local que indexó el corpus. Se configura
+  con `EMBEDDINGS_URL` (`https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`),
+  `EMBEDDINGS_API_KEY` (token con Workers AI Read y Edit) y `EMBEDDINGS_MODEL`
+- **Antes de apuntar `EMBEDDINGS_URL` a cualquier servicio nuevo**, pasar
+  `scripts/seed/check-embeddings.py`: vectores distintos degradan la búsqueda sin
+  dar ningún error. El `text_hash` del corpus usa el modelo, no el servicio:
+  cambiar de servicio no obliga a revectorizar
 - Levantarlo en local con `npm run embeddings` (`scripts/embeddings/server.py`,
   sentence-transformers sobre MPS/CUDA/CPU). Con Docker, TEI es equivalente:
   ```bash
@@ -501,6 +618,14 @@ Tipografía UI:       Inter (sans-serif)
 - `SUPABASE_SECRET_KEY` solo en servidor y scripts de seed, nunca en cliente
 - Validar todos los inputs antes de pasarlos al LLM
 - El system prompt nunca se expone al cliente
+- **CSP** con `security.csp` de Astro (`astro.config.mjs`): hashes de los
+  scripts y estilos propios, imágenes solo de `image.tmdb.org`, sin iframes
+  (`frame-ancestors 'none'`). En SSR va como cabecera: **no poner otra cabecera
+  `Content-Security-Policy` en el middleware**, que la sustituiría. Un recurso
+  externo nuevo (imágenes, fuentes, `fetch` del navegador) hay que añadirlo a
+  sus directivas. No funciona en `astro dev`: se prueba sobre el build
+- `src/middleware.ts` añade `X-Content-Type-Options`, `X-Frame-Options` y
+  `Referrer-Policy` a todas las respuestas
 
 ---
 

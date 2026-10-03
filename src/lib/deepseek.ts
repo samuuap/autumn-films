@@ -64,8 +64,40 @@ export function getDeepSeekClient(): OpenAI {
   return client;
 }
 
+/** Una herramienta que el modelo puede llamar, con sus parámetros en JSON Schema. */
+export interface ToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}
+
+export interface ToolCall {
+  readonly id: string;
+  readonly name: string;
+  /** JSON sin validar: lo interpreta quien la ejecuta. */
+  readonly arguments: string;
+}
+
+/** Una llamada del modelo a una herramienta y lo que devolvió, para la segunda vuelta. */
+export interface ToolRound {
+  readonly call: ToolCall;
+  readonly result: string;
+}
+
+/**
+ * `none` impide llamar a herramientas, `required` obliga, `auto` lo decide el
+ * modelo. Es como el servidor hace cumplir las reglas de la conversación sin
+ * depender de que el modelo las recuerde.
+ */
+export type ToolChoice = 'auto' | 'none' | 'required';
+
 export interface ChatRequestOptions {
   readonly messages: readonly ChatMessage[];
+  readonly tools?: readonly ToolDefinition[];
+  /** Solo con `tools`. Por defecto `auto`. */
+  readonly toolChoice?: ToolChoice;
+  /** La llamada anterior del modelo a una herramienta y su resultado, que van al final. */
+  readonly toolRound?: ToolRound;
   /** Por defecto `DEEPSEEK_TEMPERATURE.chat`. */
   readonly temperature?: number;
   /** Por defecto `DEEPSEEK_MAX_TOKENS`. */
@@ -78,8 +110,35 @@ export type ChunkStream = AsyncIterable<OpenAI.Chat.Completions.ChatCompletionCh
 
 function toSdkMessages(
   messages: readonly ChatMessage[],
+  toolRound: ToolRound | undefined,
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
-  return messages.map((message) => ({ role: message.role, content: message.content }));
+  const sdk: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+  if (toolRound !== undefined) {
+    const { call, result } = toolRound;
+    sdk.push(
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } },
+        ],
+      },
+      { role: 'tool', tool_call_id: call.id, content: result },
+    );
+  }
+  return sdk;
+}
+
+function toSdkTools(
+  tools: readonly ToolDefinition[] | undefined,
+): OpenAI.Chat.Completions.ChatCompletionTool[] | undefined {
+  return tools?.map((tool) => ({
+    type: 'function',
+    function: { name: tool.name, description: tool.description, parameters: { ...tool.parameters } },
+  }));
 }
 
 /**
@@ -91,13 +150,15 @@ function toSdkMessages(
  * mitad del stream: el endpoint aún puede responder con un código HTTP.
  */
 export async function streamChat(options: ChatRequestOptions): Promise<ChunkStream> {
+  const tools = toSdkTools(options.tools);
   const body: DeepSeekParams<OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming> = {
     model: DEEPSEEK_MODELS.chat,
-    messages: toSdkMessages(options.messages),
+    messages: toSdkMessages(options.messages, options.toolRound),
     temperature: options.temperature ?? DEEPSEEK_TEMPERATURE.chat,
     max_tokens: options.maxTokens ?? DEEPSEEK_MAX_TOKENS,
     stream: true,
     thinking: THINKING_DISABLED,
+    ...(tools === undefined ? {} : { tools, tool_choice: options.toolChoice ?? 'auto' }),
   };
   try {
     return await getDeepSeekClient().chat.completions.create(
@@ -109,27 +170,38 @@ export async function streamChat(options: ChatRequestOptions): Promise<ChunkStre
   }
 }
 
-/** Reduce un stream ya abierto a sus fragmentos de texto. */
-export async function* textDeltas(stream: ChunkStream): AsyncGenerator<string> {
+export type TurnEvent =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'tool_call'; readonly call: ToolCall };
+
+/**
+ * Un stream ya abierto como eventos: el texto según llega y, al final, las
+ * llamadas a herramientas. Los argumentos de una llamada llegan troceados en
+ * varios fragmentos, identificados por su `index`: se juntan antes de emitirla.
+ */
+export async function* turnEvents(stream: ChunkStream): AsyncGenerator<TurnEvent> {
+  const calls = new Map<number, { id: string; name: string; arguments: string }>();
   try {
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta.content;
-      if (delta !== undefined && delta !== null && delta.length > 0) {
-        yield delta;
+      const delta = chunk.choices[0]?.delta;
+      if (delta === undefined) continue;
+      if (typeof delta.content === 'string' && delta.content.length > 0) {
+        yield { type: 'text', text: delta.content };
+      }
+      for (const part of delta.tool_calls ?? []) {
+        const call = calls.get(part.index) ?? { id: '', name: '', arguments: '' };
+        if (part.id !== undefined) call.id = part.id;
+        call.name += part.function?.name ?? '';
+        call.arguments += part.function?.arguments ?? '';
+        calls.set(part.index, call);
       }
     }
   } catch (error: unknown) {
     throw new DeepSeekError(`El stream de chat se cortó: ${toError(error).message}`, error);
   }
-}
-
-/**
- * Igual que `streamChat`, pero ya reducido a los fragmentos de texto. Abre la
- * conexión en la primera iteración: si hace falta que los errores del proveedor
- * lleguen antes de empezar a responder, usar `streamChat` + `textDeltas`.
- */
-export async function* streamChatText(options: ChatRequestOptions): AsyncGenerator<string> {
-  yield* textDeltas(await streamChat(options));
+  for (const call of calls.values()) {
+    if (call.name.length > 0) yield { type: 'tool_call', call };
+  }
 }
 
 /**
@@ -139,7 +211,7 @@ export async function* streamChatText(options: ChatRequestOptions): AsyncGenerat
 export async function complete(options: ChatRequestOptions): Promise<string> {
   const body: DeepSeekParams<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming> = {
     model: DEEPSEEK_MODELS.chat,
-    messages: toSdkMessages(options.messages),
+    messages: toSdkMessages(options.messages, options.toolRound),
     temperature: options.temperature ?? DEEPSEEK_TEMPERATURE.extraction,
     max_tokens: options.maxTokens ?? DEEPSEEK_MAX_TOKENS,
     stream: false,

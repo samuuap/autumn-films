@@ -32,3 +32,7 @@ scripts/seed/data/
 
 # jetbrains setting folder
 .idea/
+
+# claude code (agentes, skills, settings locales)
+.claude/
+!.claude/CLAUDE.md

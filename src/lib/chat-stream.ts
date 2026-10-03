@@ -29,9 +29,14 @@ function parseBlock(block: string): ChatStreamEvent | null {
   }
   if (data.length === 0) return null;
 
-  const payload: unknown = JSON.parse(data.join('\n'));
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data.join('\n'));
+  } catch {
+    return null;
+  }
   if (!isRecord(payload)) return null;
-  if (name === 'delta' || name === 'done' || name === 'error') {
+  if (name === 'delta' || name === 'searching' || name === 'done' || name === 'error') {
     // La forma de cada evento la garantiza el endpoint, tipado con el mismo `ChatStreamEvent`.
     return { event: name, data: payload } as ChatStreamEvent;
   }

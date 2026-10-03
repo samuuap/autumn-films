@@ -21,14 +21,6 @@ import { SupabaseError } from '@/lib/errors';
 
 export type UmberSupabaseClient = SupabaseClient<Database>;
 
-/**
- * Claves públicas del proyecto, para verificar los JWT de usuario en local sin
- * llamar al servidor de auth en cada petición. Se deriva de `SUPABASE_URL` en
- * lugar de ser otra variable de entorno: así no pueden desincronizarse.
- * La consume la auth de la Fase 5.
- */
-export const SUPABASE_JWKS_URL = `${env.supabase.url}/auth/v1/.well-known/jwks.json`;
-
 const SERVER_AUTH_OPTIONS = {
   persistSession: false,
   autoRefreshToken: false,

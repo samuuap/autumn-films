@@ -1,42 +1,77 @@
 ---
 /**
- * Registro con email y contraseña. El proyecto exige confirmar el email: la
- * cuenta no tiene sesión hasta que se abre el enlace, que vuelve a `/auth/confirm`.
+ * Registro con nombre de usuario, email y contraseña. El proyecto exige confirmar
+ * el email: la cuenta no tiene sesión hasta que se abre el enlace, que vuelve a
+ * `/auth/confirm`.
+ *
+ * El nombre va en los metadatos del registro y un trigger lo copia a `profiles`,
+ * donde es único: si está cogido, Supabase rechaza el alta entera.
  */
 import AuthForm from '@/components/AuthForm.astro';
 import Layout from '@/layouts/Layout.astro';
-import { authErrorMessage, safeRedirectPath } from '@/lib/auth';
-
-const MIN_PASSWORD_CHARS = 8;
+import {
+  MAX_PASSWORD_CHARS,
+  MIN_PASSWORD_CHARS,
+  USERNAME_PATTERN,
+  authErrorMessage,
+  isUsernameTaken,
+  normalizeUsername,
+  safeRedirectPath,
+  type AuthFormError,
+} from '@/lib/auth';
 
 const next = safeRedirectPath(Astro.url.searchParams.get('next'));
 if (Astro.locals.user !== null) return Astro.redirect(next);
 
-let error: string | null = null;
+let error: AuthFormError | null = null;
 let email = '';
+let username = '';
 let sentTo: string | null = null;
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
-  const emailValue = form.get('email');
-  const passwordValue = form.get('password');
-  email = typeof emailValue === 'string' ? emailValue.trim() : '';
-  const password = typeof passwordValue === 'string' ? passwordValue : '';
+  const text = (name: string): string => {
+    const value = form.get(name);
+    return typeof value === 'string' ? value : '';
+  };
+  username = normalizeUsername(text('username'));
+  email = text('email').trim();
+  const password = text('password');
+  const passwordConfirm = text('password_confirm');
 
-  if (email.length === 0 || password.length === 0) {
-    error = 'Escribe tu email y una contraseña.';
+  if (username.length === 0 || email.length === 0 || password.length === 0) {
+    error = { message: 'Rellena todos los campos.', field: null };
+  } else if (!USERNAME_PATTERN.test(username)) {
+    error = {
+      message: 'El nombre de usuario lleva de 3 a 20 caracteres: letras sin tilde, números o guion bajo.',
+      field: 'username',
+    };
   } else if (password.length < MIN_PASSWORD_CHARS) {
-    error = `La contraseña necesita al menos ${String(MIN_PASSWORD_CHARS)} caracteres.`;
+    error = {
+      message: `La contraseña necesita al menos ${String(MIN_PASSWORD_CHARS)} caracteres.`,
+      field: 'password',
+    };
+  } else if (password.length > MAX_PASSWORD_CHARS) {
+    error = {
+      message: `La contraseña puede tener como mucho ${String(MAX_PASSWORD_CHARS)} caracteres.`,
+      field: 'password',
+    };
+  } else if (password !== passwordConfirm) {
+    error = { message: 'Las contraseñas no coinciden.', field: 'password_confirm' };
   } else {
     const { data, error: authError } = await Astro.locals.supabase.auth.signUp({
       email,
       password,
       options: {
+        data: { username },
         emailRedirectTo: `${Astro.url.origin}/auth/confirm?next=${encodeURIComponent(next)}`,
       },
     });
     if (authError !== null) {
-      error = authErrorMessage(authError);
+      // Un nombre cogido llega como un error genérico de base de datos.
+      error = (await isUsernameTaken(Astro.locals.supabase, username))
+        ? { message: 'Ese nombre de usuario ya está cogido. Prueba con otro.', field: 'username' }
+        : { message: authErrorMessage(authError), field: null };
     } else if (data.session !== null) {
       // Solo si el proyecto deja de exigir confirmación.
       return Astro.redirect(next, 303);
@@ -60,9 +95,9 @@ if (Astro.request.method === 'POST') {
             Para guardar tus conversaciones y tus favoritos. Sin cuenta también puedes chatear, pero
             se pierde al recargar.
           </p>
-          <AuthForm kind="signup" email={email} error={error} />
+          <AuthForm kind="signup" email={email} username={username} error={error} />
           <p class="text-umber-ash mt-6 text-sm">
-            ¿Ya tienes cuenta?
+            ¿Ya tienes cuenta?{' '}
             <a
               href={`/entrar?next=${encodeURIComponent(next)}`}
               class="text-umber-cream underline underline-offset-4"
